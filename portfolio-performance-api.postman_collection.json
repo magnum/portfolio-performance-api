@@ -1,0 +1,90 @@
+{
+  "info": {
+    "_postman_id": "380af95c-a60f-4ed2-b5a3-5d702e4cb53f",
+    "name": "portfolio-performance-api",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "10855",
+    "_collection_link": "https://go.postman.co/collection/10855-380af95c-a60f-4ed2-b5a3-5d702e4cb53f?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "accounts",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{apiBaseUrl}}/accounts?apikey={{apiKey}}",
+          "host": [
+            "{{apiBaseUrl}}"
+          ],
+          "path": [
+            "accounts"
+          ],
+          "query": [
+            {
+              "key": "apikey",
+              "value": "{{apiKey}}"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "accounts?nocache",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{apiBaseUrl}}/accounts?apikey={{apiKey}}&nocache",
+          "host": [
+            "{{apiBaseUrl}}"
+          ],
+          "path": [
+            "accounts"
+          ],
+          "query": [
+            {
+              "key": "apikey",
+              "value": "{{apiKey}}"
+            },
+            {
+              "key": "nocache",
+              "value": null
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "accounts.csv",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{apiBaseUrl}}/accounts.csv?apikey={{apiKey}}",
+          "host": [
+            "{{apiBaseUrl}}"
+          ],
+          "path": [
+            "accounts.csv"
+          ],
+          "query": [
+            {
+              "key": "apikey",
+              "value": "{{apiKey}}"
+            }
+          ]
+        }
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "apiKey",
+      "secret": true
+    }
+  ]
+}
