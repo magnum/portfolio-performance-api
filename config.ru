@@ -3,4 +3,4 @@
 require "dotenv/load"
 require_relative "lib/portfolio_performance_api"
 
-run PortfolioPerformanceApi::App.freeze.app
+run PortfolioPerformanceApi::App

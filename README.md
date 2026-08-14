@@ -1,10 +1,10 @@
 # Portfolio Performance API
 
-API Ruby (Roda + Puma) che scarica un file `.portfolio` cifrato da Google Drive, lo decifra e restituisce i **saldi dei conti liquidi** in JSON.
+API Ruby (Sinatra + Puma) che scarica un file `.portfolio` cifrato da Google Drive, lo decifra e restituisce i **saldi dei conti liquidi** in JSON o CSV.
 
 ## Cosa fa
 
-1. Autenticazione con API key in header (`X-Api-Key`, oppure `Authorization: Bearer …`), valore da `API_KEY`
+1. Autenticazione con API key: header `X-Api-Key`, `Authorization: Bearer …`, oppure query string `?apikey=`, valore da `API_KEY`
 2. Download del file da Google Drive con un service account
 3. Decrypt AES-128/256 come Portfolio Performance (PBKDF2-HMAC-SHA1, 65536 iterazioni)
 4. Lettura XML o protobuf (il formato binario interno)
@@ -28,7 +28,7 @@ cp env.example .env
 
 | Variabile | Obbligatoria | Descrizione |
 | --- | --- | --- |
-| `API_KEY` | sì | Chiave che i client mandano in `X-Api-Key` |
+| `API_KEY` | sì | Chiave in `X-Api-Key`, `Authorization: Bearer` o `?apikey=` |
 | `PORTFOLIO_PASSWORD` | per file cifrati | Password del `.portfolio` |
 | `GOOGLE_DRIVE_FILE_ID` | sì* | Id (o URL) del file su Drive |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | sì* | Contenuto JSON del service account |
@@ -59,6 +59,9 @@ docker run --env-file .env -p 9292:9292 portfolio-performance-api
 
 ```bash
 curl -sS -H "X-Api-Key: $API_KEY" http://127.0.0.1:9292/accounts
+curl -sS -H "X-Api-Key: $API_KEY" http://127.0.0.1:9292/accounts.json
+curl -sS -H "X-Api-Key: $API_KEY" http://127.0.0.1:9292/accounts.csv
+curl -sS "http://127.0.0.1:9292/accounts.csv?apikey=$API_KEY"
 curl -sS -H "X-Api-Key: $API_KEY" "http://127.0.0.1:9292/accounts?nocache"
 ```
 
@@ -87,7 +90,11 @@ Esempio di risposta:
 }
 ```
 
-`GET /health` è pubblico. `GET /` è uguale a `GET /accounts`.
+`GET /accounts` e `GET /accounts.json` restituiscono JSON. `GET /accounts.csv` restituisce un CSV (UTF-8, separatore `;`, decimali con virgola) importabile in Google Sheets: **File → Importa → Carica**, tipo separatore *punto e virgola*, oppure `IMPORTDATA("http://…/accounts.csv?apikey=…")`.
+
+In development Sinatra ricarica i file in `lib/` a ogni richiesta, senza riavviare Puma.
+
+`GET /health` è pubblico. `GET /` è uguale a `GET /accounts`. Header, Bearer e `?apikey=` sono equivalenti; se è presente l’header, vince lui.
 
 I saldi sono quelli dei **conti liquidi** (non il valore di mercato dei titoli). Gli importi interni di Portfolio Performance sono in centesimi.
 

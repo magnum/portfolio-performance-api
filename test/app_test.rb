@@ -7,7 +7,7 @@ class AppTest < Minitest::Test
   include PortfolioFixtures
 
   def app
-    PortfolioPerformanceApi::App.freeze.app
+    PortfolioPerformanceApi::App
   end
 
   def setup
@@ -68,5 +68,54 @@ class AppTest < Minitest::Test
   def test_bearer_token
     get "/accounts", {}, { "HTTP_AUTHORIZATION" => "Bearer test-key" }
     assert last_response.ok?, last_response.body
+  end
+
+  def test_accounts_with_query_apikey
+    get "/accounts", { apikey: "test-key" }
+    assert last_response.ok?, last_response.body
+    body = JSON.parse(last_response.body)
+    assert body.key?("accounts")
+  end
+
+  def test_accounts_csv_with_query_apikey
+    get "/accounts.csv", { apikey: "test-key" }
+    assert last_response.ok?, last_response.body
+    assert_includes last_response.content_type, "text/csv"
+    assert_includes last_response.body, "Conto corrente"
+  end
+
+  def test_invalid_query_apikey
+    get "/accounts", { apikey: "wrong" }
+    assert_equal 401, last_response.status
+  end
+
+  def test_header_wins_over_query_apikey
+    get "/accounts", { apikey: "wrong" }, { "HTTP_X_API_KEY" => "test-key" }
+    assert last_response.ok?, last_response.body
+  end
+
+  def test_accounts_json_extension
+    get "/accounts.json", {}, { "HTTP_X_API_KEY" => "test-key" }
+    assert last_response.ok?, last_response.body
+    assert_includes last_response.content_type, "application/json"
+    body = JSON.parse(last_response.body)
+    assert body.key?("accounts")
+  end
+
+  def test_accounts_csv_requires_api_key
+    get "/accounts.csv"
+    assert_equal 401, last_response.status
+  end
+
+  def test_accounts_csv
+    get "/accounts.csv", {}, { "HTTP_X_API_KEY" => "test-key" }
+    assert last_response.ok?, last_response.body
+    assert_includes last_response.content_type, "text/csv"
+    assert_match(/filename="accounts.csv"/, last_response["Content-Disposition"])
+
+    lines = last_response.body.split("\r\n")
+    assert_equal "uuid;name;currency;retired;balance;balance_cents", lines.first
+    cash = lines.find { |line| line.include?("Conto corrente") }
+    assert_equal "acc-cash;Conto corrente;EUR;FALSE;875,00;87500", cash
   end
 end

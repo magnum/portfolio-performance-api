@@ -4,12 +4,14 @@ source "https://rubygems.org"
 
 ruby ">= 3.2"
 
-gem "roda", "~> 3.89"
+gem "sinatra", "~> 4.1"
+gem "sinatra-contrib", "~> 4.1"
 gem "puma", ">= 6.4"
 gem "nokogiri", ">= 1.16"
 gem "google-protobuf", ">= 3.25"
 gem "rubyzip", "~> 2.3"
 gem "dotenv", "~> 3.1"
+gem "csv"
 gem "base64"
 gem "rake", "~> 13.2"
 
