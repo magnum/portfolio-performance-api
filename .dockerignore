@@ -1,0 +1,12 @@
+.git
+.gitignore
+.env
+.kamal
+.ruby-lsp
+/tmp
+/log
+/coverage
+/test
+/vendor
+*.md
+.env*

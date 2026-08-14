@@ -52,7 +52,33 @@ Docker:
 
 ```bash
 docker build -t portfolio-performance-api .
-docker run --env-file .env -p 9292:9292 portfolio-performance-api
+docker run --env-file .env -p 9292:80 portfolio-performance-api
+```
+
+## Deploy (Kamal)
+
+Serve un VPS con Docker e SSH, e un dominio che punta al server. Le immagini restano sul registry locale (`localhost:5555`): Kamal lo avvia sul Mac e lo espone al VPS con un tunnel SSH, senza Docker Hub o GHCR.
+
+1. In `config/deploy.yml` imposta l’IP del server e `proxy.host`.
+2. Carica i secret e fai il primo setup:
+
+```bash
+set -a && source .env && set +a
+bundle exec kamal setup
+```
+
+I deploy successivi:
+
+```bash
+set -a && source .env && set +a
+bundle exec kamal deploy
+```
+
+`kamal-proxy` ascolta 80/443, ottiene il certificato Let’s Encrypt e inoltra a Puma sulla porta 80 del container. Healthcheck: `GET /health`.
+
+```bash
+bundle exec kamal logs
+bundle exec kamal shell
 ```
 
 ## Uso

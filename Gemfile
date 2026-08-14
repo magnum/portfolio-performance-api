@@ -15,6 +15,10 @@ gem "csv"
 gem "base64"
 gem "rake", "~> 13.2"
 
+group :development do
+  gem "kamal", "~> 2.7"
+end
+
 group :test do
   gem "rack-test", "~> 2.2"
   gem "minitest", "~> 5.25"

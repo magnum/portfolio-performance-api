@@ -6,10 +6,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
   && rm -rf /var/lib/apt/lists/*
 
 COPY Gemfile Gemfile.lock ./
-ENV BUNDLE_WITHOUT=test
+ENV BUNDLE_WITHOUT=development:test \
+    RACK_ENV=production \
+    PORT=80
+
 RUN bundle install
 
 COPY . .
 
-EXPOSE 9292
+EXPOSE 80
 CMD ["bundle", "exec", "puma", "-C", "config/puma.rb"]

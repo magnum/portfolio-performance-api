@@ -1,0 +1,47 @@
+# Name of your application. Used to uniquely configure containers.
+service: portfolio-performance-api
+
+# Name of the container image (pushed to the registry below).
+#image: magnum/portfolio-performance-api
+
+# Replace with your server IP or hostname.
+servers:
+  web:
+    - 159.69.196.166
+
+# kamal-proxy terminates SSL and forwards to the app container on port 80.
+# Replace host with the DNS name that points at the server.
+# If you use Cloudflare in front, set SSL/TLS mode to Full.
+proxy:
+  ssl: true
+  host: ppapi.m6i.it
+  healthcheck:
+    path: /health
+    interval: 3
+    timeout: 5
+
+# Local registry on the machine that runs kamal (no Docker Hub / GHCR).
+# Kamal starts registry:2 on this port and SSH-tunnels it to the server.
+registry:
+  server: localhost:5555
+
+builder:
+  arch: amd64
+
+env:
+  clear:
+    RACK_ENV: production
+    PORT: "80"
+    CACHE_TTL_MINUTES: "15"
+  secret:
+    - API_KEY
+    - PORTFOLIO_PASSWORD
+    - GOOGLE_DRIVE_FILE_ID
+    - GOOGLE_SERVICE_ACCOUNT_JSON
+
+aliases:
+  shell: app exec --interactive --reuse "bash"
+  logs: app logs -f
+
+# ssh:
+#   user: root
