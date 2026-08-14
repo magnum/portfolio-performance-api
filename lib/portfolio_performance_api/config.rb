@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require "json"
+require "base64"
+
 module PortfolioPerformanceApi
   module Config
     module_function
@@ -25,7 +28,7 @@ module PortfolioPerformanceApi
 
     def service_account_json
       inline = env("GOOGLE_SERVICE_ACCOUNT_JSON")
-      return inline unless inline.nil? || inline.empty?
+      return decode_service_account(inline) unless inline.nil? || inline.empty?
 
       path = env("GOOGLE_APPLICATION_CREDENTIALS")
       return File.read(path) if path && !path.empty? && File.file?(path)
@@ -77,6 +80,33 @@ module PortfolioPerformanceApi
       raise NotConfigured, "missing env #{name}" if value.nil? || value.empty?
 
       value
+    end
+
+    def decode_service_account(raw)
+      value = unwrap_quotes(raw)
+      return value if json_object?(value)
+
+      decoded = Base64.decode64(value.delete(" \n"))
+      return decoded if json_object?(decoded)
+
+      value
+    end
+
+    def unwrap_quotes(value)
+      text = value.to_s.strip
+      return text[1..-2] if text.length >= 2 && (
+        (text.start_with?("'") && text.end_with?("'")) ||
+        (text.start_with?('"') && text.end_with?('"'))
+      )
+
+      text
+    end
+
+    def json_object?(value)
+      parsed = JSON.parse(value)
+      parsed.is_a?(Hash)
+    rescue JSON::ParserError, TypeError
+      false
     end
   end
 end

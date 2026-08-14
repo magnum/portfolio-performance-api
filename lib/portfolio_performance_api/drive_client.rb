@@ -133,9 +133,19 @@ module PortfolioPerformanceApi
         exp: now + 3600
       }.to_json)
       input = "#{header}.#{payload}"
-      key = OpenSSL::PKey::RSA.new(@credentials.fetch("private_key"))
+      key = self.class.signing_key(@credentials.fetch("private_key"))
       signature = b64(key.sign(OpenSSL::Digest::SHA256.new, input))
       "#{input}.#{signature}"
+    end
+
+    def self.signing_key(pem)
+      OpenSSL::PKey.read(normalize_pem(pem))
+    rescue OpenSSL::PKey::PKeyError => error
+      raise DriveError, "invalid Google service account private key (#{error.message})"
+    end
+
+    def self.normalize_pem(pem)
+      pem.to_s.gsub("\r\n", "\n").gsub('\\n', "\n")
     end
 
     def b64(data)
