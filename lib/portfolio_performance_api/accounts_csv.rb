@@ -4,7 +4,7 @@ require "csv"
 
 module PortfolioPerformanceApi
   module AccountsCsv
-    HEADERS = %w[uuid name currency retired balance balance_cents].freeze
+    HEADERS = %w[uuid kind name currency retired balance balance_cents reference_account_uuid].freeze
 
     module_function
 
@@ -31,11 +31,13 @@ module PortfolioPerformanceApi
       row = stringify_keys(row)
       [
         row["uuid"],
+        row["kind"],
         row["name"],
         row["currency"],
         boolean(row["retired"]),
         decimal(row["balance"]),
-        row["balance_cents"]
+        row["balance_cents"],
+        row["reference_account_uuid"]
       ]
     end
 

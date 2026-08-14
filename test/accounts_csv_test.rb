@@ -9,6 +9,7 @@ class AccountsCsvTest < Minitest::Test
       accounts: [
         {
           uuid: "acc-cash",
+          kind: "deposit",
           name: "Conto corrente",
           currency: "EUR",
           retired: false,
@@ -16,20 +17,22 @@ class AccountsCsvTest < Minitest::Test
           balance_cents: 87_500
         },
         {
-          uuid: "acc-old",
-          name: "Chiuso",
+          uuid: "port-titoli",
+          kind: "securities",
+          name: "Deposito titoli",
           currency: "EUR",
-          retired: true,
-          balance: 0.01,
-          balance_cents: 1
+          retired: false,
+          balance: 100.0,
+          balance_cents: 10_000,
+          reference_account_uuid: "acc-cash"
         }
       ]
     )
 
     lines = csv.split("\r\n")
-    assert_equal "uuid;name;currency;retired;balance;balance_cents", lines.first
-    assert_equal "acc-cash;Conto corrente;EUR;FALSE;875,00;87500", lines[1]
-    assert_equal "acc-old;Chiuso;EUR;TRUE;0,01;1", lines[2]
+    assert_equal "uuid;kind;name;currency;retired;balance;balance_cents;reference_account_uuid", lines.first
+    assert_equal "acc-cash;deposit;Conto corrente;EUR;FALSE;875,00;87500;", lines[1]
+    assert_equal "port-titoli;securities;Deposito titoli;EUR;FALSE;100,00;10000;acc-cash", lines[2]
   end
 
   def test_quotes_fields_with_separator_or_quotes

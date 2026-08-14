@@ -9,12 +9,39 @@ option ruby_package = "PortfolioPerformanceApi.Proto";
 // Subset of Portfolio Performance's client.proto (field numbers match the
 // official schema so unknown fields are ignored at parse time).
 
+message PHistoricalPrice {
+  int64 date = 1;
+  int64 close = 2;
+}
+
+message PFullHistoricalPrice {
+  int64 date = 1;
+  int64 close = 2;
+}
+
+message PSecurity {
+  string uuid = 1;
+  string name = 3;
+  optional string currencyCode = 4;
+  repeated PHistoricalPrice prices = 13;
+  optional PFullHistoricalPrice latest = 16;
+  bool isRetired = 20;
+}
+
 message PAccount {
   string uuid = 1;
   string name = 2;
   string currencyCode = 3;
   optional string note = 4;
   bool isRetired = 5;
+}
+
+message PPortfolio {
+  string uuid = 1;
+  string name = 2;
+  optional string note = 3;
+  bool isRetired = 4;
+  optional string referenceAccount = 5;
 }
 
 message PTransactionUnit {
@@ -52,16 +79,22 @@ message PTransaction {
   string uuid = 1;
   Type type = 2;
   optional string account = 3;
+  optional string portfolio = 4;
   optional string otherAccount = 5;
+  optional string otherPortfolio = 6;
   google.protobuf.Timestamp date = 9;
   string currencyCode = 10;
   int64 amount = 11;
+  optional int64 shares = 12;
+  optional string security = 14;
   repeated PTransactionUnit units = 15;
 }
 
 message PClient {
   int32 version = 1;
+  repeated PSecurity securities = 2;
   repeated PAccount accounts = 3;
+  repeated PPortfolio portfolios = 4;
   repeated PTransaction transactions = 5;
   string baseCurrency = 12;
 }

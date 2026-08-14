@@ -1,6 +1,6 @@
 # Portfolio Performance API
 
-API Ruby (Sinatra + Puma) che scarica un file `.portfolio` cifrato da Google Drive, lo decifra e restituisce i **saldi dei conti liquidi** in JSON o CSV.
+API Ruby (Sinatra + Puma) che scarica un file `.portfolio` cifrato da Google Drive, lo decifra e restituisce i **saldi dei conti liquidi e dei conti titoli** in JSON o CSV.
 
 ## Cosa fa
 
@@ -8,7 +8,7 @@ API Ruby (Sinatra + Puma) che scarica un file `.portfolio` cifrato da Google Dri
 2. Download del file da Google Drive con un service account
 3. Decrypt AES-128/256 come Portfolio Performance (PBKDF2-HMAC-SHA1, 65536 iterazioni)
 4. Lettura XML o protobuf (il formato binario interno)
-5. Calcolo del saldo per ogni account, con la stessa logica di `Account#getCurrentAmount`
+5. Calcolo del saldo per ogni conto deposito (`Account#getCurrentAmount`) e del valore di mercato per ogni conto titoli
 6. Cache in memoria per `CACHE_TTL_MINUTES` minuti; `?nocache` forza un nuovo download
 
 ## Setup Google Drive
@@ -100,6 +100,7 @@ Esempio di risposta:
   "accounts": [
     {
       "uuid": "…",
+      "kind": "deposit",
       "name": "Conto corrente",
       "currency": "EUR",
       "retired": false,
@@ -122,7 +123,7 @@ In development Sinatra ricarica i file in `lib/` a ogni richiesta, senza riavvia
 
 `GET /health` è pubblico. `GET /` è uguale a `GET /accounts`. Header, Bearer e `?apikey=` sono equivalenti; se è presente l’header, vince lui.
 
-I saldi sono quelli dei **conti liquidi** (non il valore di mercato dei titoli). Gli importi interni di Portfolio Performance sono in centesimi.
+Ogni riga ha `kind`: `deposit` (conto liquido, saldo da movimenti di cassa) oppure `securities` (conto titoli, valore di mercato al prezzo più recente, senza conversione FX). I conti titoli includono anche `reference_account_uuid`.
 
 ## Test
 

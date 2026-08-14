@@ -20,21 +20,19 @@ module PortfolioPerformanceApi
       "TRANSFER_IN" => 1
     }.freeze
 
-    def self.compute(client, include_retired: true)
-      accounts = client.accounts
-      accounts = accounts.reject(&:retired) unless include_retired
+    SHARE_DIVISOR = 100_000_000
+    QUOTE_DIVISOR = 100_000_000
 
-      rows = accounts.map do |account|
-        cents = balance_cents(account, client.transactions)
-        {
-          uuid: account.uuid,
-          name: account.name,
-          currency: account.currency,
-          retired: account.retired,
-          balance: cents / 100.0,
-          balance_cents: cents
-        }
+    def self.compute(client, include_retired: true)
+      deposits = Array(client.accounts)
+      portfolios = Array(client.portfolios)
+      unless include_retired
+        deposits = deposits.reject(&:retired)
+        portfolios = portfolios.reject(&:retired)
       end
+
+      rows = deposits.map { |account| deposit_row(account, client) } +
+             portfolios.map { |account| securities_row(account, client) }
 
       totals = rows.group_by { |row| row[:currency] }.map do |currency, group|
         cents = group.sum { |row| row[:balance_cents] }
@@ -49,7 +47,34 @@ module PortfolioPerformanceApi
       }
     end
 
-    def self.balance_cents(account, transactions)
+    def self.deposit_row(account, client)
+      cents = cash_balance_cents(account, client.transactions)
+      {
+        uuid: account.uuid,
+        kind: Parser::KIND_DEPOSIT,
+        name: account.name,
+        currency: account.currency,
+        retired: account.retired,
+        balance: cents / 100.0,
+        balance_cents: cents
+      }
+    end
+
+    def self.securities_row(account, client)
+      cents = market_value_cents(account, client)
+      {
+        uuid: account.uuid,
+        kind: Parser::KIND_SECURITIES,
+        name: account.name,
+        currency: account.currency || client.base_currency,
+        retired: account.retired,
+        balance: cents / 100.0,
+        balance_cents: cents,
+        reference_account_uuid: account.reference_account_uuid
+      }
+    end
+
+    def self.cash_balance_cents(account, transactions)
       transactions.sum { |tx| signed_amount(account, tx) }
     end
 
@@ -87,6 +112,46 @@ module PortfolioPerformanceApi
       end
       fx ? fx.fx_amount_cents : tx.amount_cents
     end
-    private_class_method :balance_cents, :signed_amount, :cash_transfer_amount, :target_amount
+
+    def self.market_value_cents(portfolio, client)
+      securities = Array(client.securities).to_h { |security| [security.uuid, security] }
+      shares_by_security = Hash.new(0)
+      Array(client.transactions).each do |tx|
+        delta = share_delta(portfolio.uuid, tx)
+        next if delta.zero? || tx.security_uuid.to_s.empty?
+
+        shares_by_security[tx.security_uuid] += delta
+      end
+
+      shares_by_security.sum do |security_uuid, shares|
+        next 0 if shares.zero?
+
+        security = securities[security_uuid]
+        next 0 if security.nil? || security.quote.to_i.zero?
+
+        (shares * security.quote) / (SHARE_DIVISOR * QUOTE_DIVISOR / 100)
+      end
+    end
+
+    def self.share_delta(portfolio_uuid, tx)
+      case tx.type
+      when "PURCHASE", "INBOUND_DELIVERY", "TRANSFER_IN"
+        tx.portfolio_uuid == portfolio_uuid ? tx.shares.to_i : 0
+      when "SALE", "OUTBOUND_DELIVERY"
+        tx.portfolio_uuid == portfolio_uuid ? -tx.shares.to_i : 0
+      when "SECURITY_TRANSFER"
+        if tx.portfolio_uuid == portfolio_uuid
+          -tx.shares.to_i
+        elsif tx.other_portfolio_uuid == portfolio_uuid
+          tx.shares.to_i
+        else
+          0
+        end
+      else
+        0
+      end
+    end
+    private_class_method :deposit_row, :securities_row, :cash_balance_cents, :signed_amount,
+                         :cash_transfer_amount, :target_amount, :market_value_cents, :share_delta
   end
 end

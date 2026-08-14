@@ -42,6 +42,10 @@ class AppTest < Minitest::Test
     body = JSON.parse(last_response.body)
     names = body.fetch("accounts").map { |row| row["name"] }
     assert_includes names, "Conto corrente"
+    assert_equal "deposit", body["accounts"].find { |row| row["name"] == "Conto corrente" }["kind"]
+    titoli = body["accounts"].find { |row| row["name"] == "Deposito titoli" }
+    assert_equal "securities", titoli["kind"]
+    assert_in_delta 100.0, titoli["balance"]
     assert_in_delta 875.0, body["accounts"].find { |row| row["name"] == "Conto corrente" }["balance"]
     refute body["cached"]
   end
@@ -114,8 +118,10 @@ class AppTest < Minitest::Test
     assert_match(/filename="accounts.csv"/, last_response["Content-Disposition"])
 
     lines = last_response.body.split("\r\n")
-    assert_equal "uuid;name;currency;retired;balance;balance_cents", lines.first
+    assert_equal "uuid;kind;name;currency;retired;balance;balance_cents;reference_account_uuid", lines.first
     cash = lines.find { |line| line.include?("Conto corrente") }
-    assert_equal "acc-cash;Conto corrente;EUR;FALSE;875,00;87500", cash
+    assert_equal "acc-cash;deposit;Conto corrente;EUR;FALSE;875,00;87500;", cash
+    titoli = lines.find { |line| line.include?("Deposito titoli") }
+    assert_equal "port-titoli;securities;Deposito titoli;EUR;FALSE;100,00;10000;acc-cash", titoli
   end
 end

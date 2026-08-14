@@ -87,6 +87,36 @@ module PortfolioFixtures
           </transactions>
         </account>
       </accounts>
+      <securities>
+        <security>
+          <uuid>sec-etf</uuid>
+          <name>VWCE</name>
+          <currencyCode>EUR</currencyCode>
+          <latest t="2024-01-15" v="10000000000"/>
+        </security>
+      </securities>
+      <portfolios>
+        <portfolio>
+          <uuid>port-titoli</uuid>
+          <name>Deposito titoli</name>
+          <isRetired>false</isRetired>
+          <referenceAccount>
+            <uuid>acc-cash</uuid>
+          </referenceAccount>
+          <transactions>
+            <portfolio-transaction>
+              <uuid>tx-buy</uuid>
+              <currencyCode>EUR</currencyCode>
+              <amount>100000</amount>
+              <shares>100000000</shares>
+              <security>
+                <uuid>sec-etf</uuid>
+              </security>
+              <type>BUY</type>
+            </portfolio-transaction>
+          </transactions>
+        </portfolio>
+      </portfolios>
     </client>
   XML
 
@@ -118,6 +148,17 @@ module PortfolioFixtures
         proto::PAccount.new(uuid: "acc-cash", name: "Conto corrente", currencyCode: "EUR", isRetired: false),
         proto::PAccount.new(uuid: "acc-savings", name: "Risparmio", currencyCode: "EUR", isRetired: false)
       ],
+      portfolios: [
+        proto::PPortfolio.new(uuid: "port-titoli", name: "Deposito titoli", isRetired: false, referenceAccount: "acc-cash")
+      ],
+      securities: [
+        proto::PSecurity.new(
+          uuid: "sec-etf",
+          name: "VWCE",
+          currencyCode: "EUR",
+          latest: proto::PFullHistoricalPrice.new(date: 19_737, close: 10_000_000_000)
+        )
+      ],
       transactions: [
         proto::PTransaction.new(uuid: "tx-1", type: :DEPOSIT, account: "acc-cash", currencyCode: "EUR", amount: 100_000),
         proto::PTransaction.new(uuid: "tx-2", type: :FEE, account: "acc-cash", currencyCode: "EUR", amount: 2_500),
@@ -129,7 +170,16 @@ module PortfolioFixtures
           currencyCode: "EUR",
           amount: 10_000
         ),
-        proto::PTransaction.new(uuid: "tx-5", type: :INTEREST, account: "acc-savings", currencyCode: "EUR", amount: 1_500)
+        proto::PTransaction.new(uuid: "tx-5", type: :INTEREST, account: "acc-savings", currencyCode: "EUR", amount: 1_500),
+        proto::PTransaction.new(
+          uuid: "tx-buy",
+          type: :PURCHASE,
+          portfolio: "port-titoli",
+          currencyCode: "EUR",
+          amount: 100_000,
+          shares: 100_000_000,
+          security: "sec-etf"
+        )
       ]
     )
   end
