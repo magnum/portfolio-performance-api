@@ -74,11 +74,37 @@
             {
               "key": "apikey",
               "value": "{{apiKey}}"
+            }
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "accounts.csv?locale=it",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{apiBaseUrl}}/accounts.csv?apikey={{apiKey}}&locale=en&nocache=4",
+          "host": [
+            "{{apiBaseUrl}}"
+          ],
+          "path": [
+            "accounts.csv"
+          ],
+          "query": [
+            {
+              "key": "apikey",
+              "value": "{{apiKey}}"
             },
             {
               "key": "locale",
-              "value": "it",
-              "disabled": true
+              "value": "en"
+            },
+            {
+              "key": "nocache",
+              "value": "4"
             }
           ]
         }
