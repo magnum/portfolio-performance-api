@@ -1,0 +1,9 @@
+/.bundle/
+/vendor/bundle/
+/.env
+*.gem
+/tmp/
+/log/
+.DS_Store
+/coverage/
+.ruby-lsp/

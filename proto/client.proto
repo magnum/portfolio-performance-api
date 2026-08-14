@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+package name.abuchen.portfolio;
+
+import "google/protobuf/timestamp.proto";
+
+option ruby_package = "PortfolioPerformanceApi.Proto";
+
+// Subset of Portfolio Performance's client.proto (field numbers match the
+// official schema so unknown fields are ignored at parse time).
+
+message PAccount {
+  string uuid = 1;
+  string name = 2;
+  string currencyCode = 3;
+  optional string note = 4;
+  bool isRetired = 5;
+}
+
+message PTransactionUnit {
+  enum Type {
+    GROSS_VALUE = 0;
+    TAX = 1;
+    FEE = 2;
+  }
+  Type type = 1;
+  int64 amount = 2;
+  string currencyCode = 3;
+  optional int64 fxAmount = 4;
+  optional string fxCurrencyCode = 5;
+}
+
+message PTransaction {
+  enum Type {
+    PURCHASE = 0;
+    SALE = 1;
+    INBOUND_DELIVERY = 2;
+    OUTBOUND_DELIVERY = 3;
+    SECURITY_TRANSFER = 4;
+    CASH_TRANSFER = 5;
+    DEPOSIT = 6;
+    REMOVAL = 7;
+    DIVIDEND = 8;
+    INTEREST = 9;
+    INTEREST_CHARGE = 10;
+    TAX = 11;
+    TAX_REFUND = 12;
+    FEE = 13;
+    FEE_REFUND = 14;
+  }
+
+  string uuid = 1;
+  Type type = 2;
+  optional string account = 3;
+  optional string otherAccount = 5;
+  google.protobuf.Timestamp date = 9;
+  string currencyCode = 10;
+  int64 amount = 11;
+  repeated PTransactionUnit units = 15;
+}
+
+message PClient {
+  int32 version = 1;
+  repeated PAccount accounts = 3;
+  repeated PTransaction transactions = 5;
+  string baseCurrency = 12;
+}
