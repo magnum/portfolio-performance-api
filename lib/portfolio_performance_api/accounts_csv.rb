@@ -8,12 +8,13 @@ module PortfolioPerformanceApi
 
     module_function
 
-    def generate(payload)
+    def generate(payload, locale: "en")
+      locale = normalize_locale(locale)
       accounts = Array(payload[:accounts] || payload["accounts"])
       CSV.generate(**csv_options) do |csv|
         csv << HEADERS
         accounts.each do |row|
-          csv << serialize_row(row)
+          csv << serialize_row(row, locale)
         end
       end
     end
@@ -27,7 +28,7 @@ module PortfolioPerformanceApi
       }
     end
 
-    def serialize_row(row)
+    def serialize_row(row, locale)
       row = stringify_keys(row)
       [
         row["uuid"],
@@ -35,7 +36,7 @@ module PortfolioPerformanceApi
         row["name"],
         row["currency"],
         boolean(row["retired"]),
-        decimal(row["balance"]),
+        decimal(row["balance"], locale),
         row["balance_cents"],
         row["reference_account_uuid"]
       ]
@@ -49,8 +50,16 @@ module PortfolioPerformanceApi
       value ? "TRUE" : "FALSE"
     end
 
-    def decimal(value)
-      format("%.2f", Float(value)).tr(".", ",")
+    def decimal(value, locale)
+      formatted = format("%.2f", Float(value))
+      return formatted unless locale == "it"
+
+      formatted.tr(".", ",")
+    end
+
+    def normalize_locale(value)
+      code = value.to_s.strip.downcase.split(/[-_]/, 2).first
+      code == "it" ? "it" : "en"
     end
 
     private_class_method :csv_options, :serialize_row, :stringify_keys, :boolean, :decimal

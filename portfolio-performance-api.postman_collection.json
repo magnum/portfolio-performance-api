@@ -74,6 +74,11 @@
             {
               "key": "apikey",
               "value": "{{apiKey}}"
+            },
+            {
+              "key": "locale",
+              "value": "it",
+              "disabled": true
             }
           ]
         }

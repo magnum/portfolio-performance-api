@@ -117,7 +117,7 @@ Esempio di risposta:
 }
 ```
 
-`GET /accounts` e `GET /accounts.json` restituiscono JSON. `GET /accounts.csv` restituisce un CSV (UTF-8, separatore `;`, decimali con virgola) importabile in Google Sheets: **File → Importa → Carica**, tipo separatore *punto e virgola*, oppure `IMPORTDATA("http://…/accounts.csv?apikey=…")`.
+`GET /accounts` e `GET /accounts.json` restituiscono JSON. `GET /accounts.csv` restituisce un CSV (UTF-8, separatore `;`). I decimali dipendono da `locale` (default `en`, punto; `locale=it`, virgola), es. `/accounts.csv?locale=it`. Importabile in Google Sheets: **File → Importa → Carica**, tipo separatore *punto e virgola*, oppure `IMPORTDATA("http://…/accounts.csv?apikey=…")`.
 
 In development Sinatra ricarica i file in `lib/` a ogni richiesta, senza riavviare Puma.
 

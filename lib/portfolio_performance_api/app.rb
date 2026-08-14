@@ -47,9 +47,12 @@ module PortfolioPerformanceApi
 
     get "/accounts.csv" do
       payload = accounts_payload
+      lang = AccountsCsv.normalize_locale(params["locale"])
       content_type "text/csv", charset: "utf-8"
-      headers["Content-Disposition"] = %(inline; filename="accounts.csv")
-      AccountsCsv.generate(payload)
+      headers["Content-Language"] = lang
+      headers["Cache-Control"] = "private, no-store"
+      headers["Content-Disposition"] = %(inline; filename="accounts-#{lang}.csv")
+      AccountsCsv.generate(payload, locale: lang)
     end
 
     get "/accounts.json" do

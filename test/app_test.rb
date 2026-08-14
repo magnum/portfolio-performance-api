@@ -115,13 +115,21 @@ class AppTest < Minitest::Test
     get "/accounts.csv", {}, { "HTTP_X_API_KEY" => "test-key" }
     assert last_response.ok?, last_response.body
     assert_includes last_response.content_type, "text/csv"
-    assert_match(/filename="accounts.csv"/, last_response["Content-Disposition"])
+    assert_match(/filename="accounts-en.csv"/, last_response["Content-Disposition"])
 
     lines = last_response.body.split("\r\n")
     assert_equal "uuid;kind;name;currency;retired;balance;balance_cents;reference_account_uuid", lines.first
     cash = lines.find { |line| line.include?("Conto corrente") }
-    assert_equal "acc-cash;deposit;Conto corrente;EUR;FALSE;875,00;87500;", cash
+    assert_equal "acc-cash;deposit;Conto corrente;EUR;FALSE;875.00;87500;", cash
     titoli = lines.find { |line| line.include?("Deposito titoli") }
-    assert_equal "port-titoli;securities;Deposito titoli;EUR;FALSE;100,00;10000;acc-cash", titoli
+    assert_equal "port-titoli;securities;Deposito titoli;EUR;FALSE;100.00;10000;acc-cash", titoli
+  end
+
+  def test_accounts_csv_italian_locale
+    get "/accounts.csv", { locale: "it" }, { "HTTP_X_API_KEY" => "test-key" }
+    assert last_response.ok?, last_response.body
+    assert_equal "it", last_response["Content-Language"]
+    cash = last_response.body.split("\r\n").find { |line| line.include?("Conto corrente") }
+    assert_equal "acc-cash;deposit;Conto corrente;EUR;FALSE;875,00;87500;", cash
   end
 end

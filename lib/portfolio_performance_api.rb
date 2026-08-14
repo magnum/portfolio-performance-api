@@ -20,7 +20,7 @@ require_relative "portfolio_performance_api/auth"
 require_relative "portfolio_performance_api/app"
 
 module PortfolioPerformanceApi
-  VERSION = "0.1.0"
+  VERSION = "0.1.1"
 
   # Process-wide snapshot so tests and requests share the same cache.
   @snapshot_mutex = Mutex.new
