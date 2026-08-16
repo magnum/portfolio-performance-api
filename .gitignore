@@ -7,3 +7,5 @@
 .DS_Store
 /coverage/
 .ruby-lsp/
+
+/import

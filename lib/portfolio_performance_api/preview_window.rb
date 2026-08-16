@@ -2,12 +2,15 @@
 
 module PortfolioPerformanceApi
   class PreviewWindow
-    attr_reader :offset, :page_size, :portfolio_lines, :spreadsheet_lines
+    attr_reader :offset, :page_size, :lists
 
-    def initialize(portfolio_lines, spreadsheet_lines, page_size:)
-      @portfolio_lines = Array(portfolio_lines)
-      @spreadsheet_lines = Array(spreadsheet_lines)
+    def initialize(lists, page_size:, page_sizes: nil, locked: nil)
+      @lists = Array(lists).map { |list| Array(list) }
+      raise ArgumentError, "preview needs at least one list" if @lists.empty?
+
       @page_size = [Integer(page_size), 1].max
+      @page_sizes = Array(page_sizes)
+      @locked = Array(locked)
       @offset = 0
     end
 
@@ -27,52 +30,69 @@ module PortfolioPerformanceApi
       move(@page_size)
     end
 
-    def portfolio_visible
-      slice(@portfolio_lines)
+    def visible(index = 0)
+      slice(index)
     end
 
-    def spreadsheet_visible
-      slice(@spreadsheet_lines)
+    def range(index = 0)
+      range_for(index)
     end
 
-    def portfolio_range
-      range(@portfolio_lines)
-    end
+    def page_size_at(index)
+      size = @page_sizes[Integer(index)]
+      return @page_size if size.nil?
 
-    def spreadsheet_range
-      range(@spreadsheet_lines)
+      [Integer(size), 1].max
     end
 
     def max_offset
-      [0, [@portfolio_lines.size, @spreadsheet_lines.size].max - @page_size].max
+      @lists.each_index.map { |index| list_max_offset(index) }.max
     end
 
     private
+
+    def locked?(index)
+      @locked[Integer(index)] == true
+    end
+
+    def list_at(index)
+      @lists.fetch(Integer(index))
+    end
 
     def move(delta)
       @offset = [[@offset + delta, 0].max, max_offset].min
     end
 
-    def slice(lines)
+    def slice(index)
+      lines = list_at(index)
       return [] if lines.empty?
 
-      lines[start_index(lines), @page_size]
+      lines[start_index(index), page_size_at(index)]
     end
 
-    def start_index(lines)
-      [@offset, last_start(lines)].min
+    def start_index(index)
+      return 0 if locked?(index)
+
+      [@offset, last_start(index)].min
     end
 
-    def last_start(lines)
-      [0, lines.size - @page_size].max
+    def last_start(index)
+      [0, list_at(index).size - page_size_at(index)].max
     end
 
-    def range(lines)
-      visible = slice(lines)
-      return [0, 0, lines.size] if visible.empty?
+    def list_max_offset(index)
+      return 0 if locked?(index)
 
-      from = start_index(lines) + 1
-      [from, from + visible.size - 1, lines.size]
+      [0, list_at(index).size - page_size_at(index)].max
+    end
+
+    def range_for(index)
+      visible_rows = slice(index)
+      lines = list_at(index)
+      return [0, 0, lines.size] if visible_rows.empty?
+
+      from = start_index(index) + 1
+      [from, from + visible_rows.size - 1, lines.size]
     end
   end
 end

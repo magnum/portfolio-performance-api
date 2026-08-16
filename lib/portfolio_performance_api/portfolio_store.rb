@@ -3,6 +3,11 @@
 require "stringio"
 require "zip"
 
+require_relative "errors"
+require_relative "decryptor"
+require_relative "file_reader"
+require_relative "proto/client_pb"
+
 module PortfolioPerformanceApi
   class PortfolioStore
     Loaded = Struct.new(
@@ -86,11 +91,13 @@ module PortfolioPerformanceApi
 
     def self.zip_entries(zip_bytes)
       entries = {}
-      Zip::File.open_buffer(StringIO.new(zip_bytes)) do |zip|
-        zip.each do |entry|
-          next if entry.directory?
+      without_zip_date_warnings do
+        Zip::File.open_buffer(StringIO.new(zip_bytes)) do |zip|
+          zip.each do |entry|
+            next if entry.directory?
 
-          entries[File.basename(entry.name)] = entry.get_input_stream.read
+            entries[File.basename(entry.name)] = entry.get_input_stream.read
+          end
         end
       end
       entries
@@ -104,6 +111,14 @@ module PortfolioPerformanceApi
         end
       end.string
     end
-    private_class_method :zip_entries, :write_zip
+
+    def self.without_zip_date_warnings
+      previous = Zip.warn_invalid_date
+      Zip.warn_invalid_date = false
+      yield
+    ensure
+      Zip.warn_invalid_date = previous
+    end
+    private_class_method :zip_entries, :write_zip, :without_zip_date_warnings
   end
 end

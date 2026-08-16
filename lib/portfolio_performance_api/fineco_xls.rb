@@ -4,7 +4,7 @@ require "date"
 
 module PortfolioPerformanceApi
   class FinecoXls
-    Row = Struct.new(:date, :description, :amount_cents, :type, :raw, keyword_init: true)
+    Row = Struct.new(:date, :description, :amount_cents, :type, :raw, :security, :offset_account, keyword_init: true)
 
     DEFAULT_SKIP_LINES = 13
     DATE_VALUTA_HEADERS = /data[_\s-]*valuta/i
@@ -36,6 +36,18 @@ module PortfolioPerformanceApi
       parse_rows(read_sheet(path), skip_lines: skip_lines)
     end
 
+    def self.partition_excluded(rows, pattern)
+      rows = Array(rows)
+      return [[], rows] if pattern.to_s.empty?
+
+      regexp = Regexp.new(pattern, Regexp::IGNORECASE)
+      rows.partition { |row| row_cells(row).any? { |cell| cell.match?(regexp) } }
+    end
+
+    def self.exclude_matching(rows, pattern)
+      partition_excluded(rows, pattern)[1]
+    end
+
     def self.parse_rows(rows, skip_lines: 0)
       rows = Array(rows).drop(skip_lines)
       header_index, mapping = find_header(rows)
@@ -57,10 +69,21 @@ module PortfolioPerformanceApi
 
       require "roo"
       require "roo-xls"
+      require "zip"
 
-      book = Roo::Spreadsheet.open(path.to_s)
-      sheet = book.sheet(0)
-      (sheet.first_row..sheet.last_row).map { |index| sheet.row(index) }
+      without_zip_date_warnings do
+        book = Roo::Spreadsheet.open(path.to_s)
+        sheet = book.sheet(0)
+        (sheet.first_row..sheet.last_row).map { |index| sheet.row(index) }
+      end
+    end
+
+    def self.without_zip_date_warnings
+      previous = Zip.warn_invalid_date
+      Zip.warn_invalid_date = false
+      yield
+    ensure
+      Zip.warn_invalid_date = previous
     end
 
     def self.read_html(path)
@@ -187,7 +210,18 @@ module PortfolioPerformanceApi
       0
     end
 
+    def self.row_cells(row)
+      cells = Array(row.raw).map { |cell| cell.to_s }
+      return cells unless cells.empty?
+
+      [row.description.to_s]
+    end
+
+    def self.matching_cells(row)
+      row_cells(row)
+    end
     private_class_method :read_sheet, :read_html, :html_spreadsheet?, :find_header, :find_column,
-                         :build_row, :build_note, :cell_text, :parse_date, :parse_amount, :date_like?
+                         :build_row, :build_note, :cell_text, :parse_date, :parse_amount, :date_like?,
+                         :without_zip_date_warnings
   end
 end

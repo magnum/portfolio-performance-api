@@ -1,6 +1,6 @@
 # Portfolio Performance API
 
-Ruby API (Sinatra + Puma) that reads a `.portfolio` file (from Google Drive or disk) and returns **balances for cash accounts and securities accounts**. It also includes two utilities: Fineco transaction import and bidirectional Google Sheets sync.
+Ruby API (Sinatra + Puma) that reads a `.portfolio` file (from Google Drive or disk) and returns **balances for cash accounts and securities accounts**. It also includes two utilities: `bin/import` (Fineco) and `bin/sync` (Google Sheets).
 
 Demo file for trials and tests: `test/test.portfolio` (password `portfolio`).
 
@@ -11,13 +11,13 @@ cp env.example .env
 bundle install
 ```
 
-For Drive/Sheets: enable the **Google Drive API** and **Google Sheets API**, create a **service account**, and download the JSON. Share the files with the `…@….iam.gserviceaccount.com` email (Viewer for the API only, **Editor** for sync and tests). Drive returns 404 if the service account has no access.
+For Drive/Sheets: enable the **Google Drive API** and **Google Sheets API**, create a **service account**, and download the JSON. Share the files with the `…@….iam.gserviceaccount.com` email (Viewer for the API only, **Editor** for import, sync, and tests). Drive returns 404 if the service account has no access.
 
 | Variable | Used by | Description |
 | --- | --- | --- |
 | `API_KEY` | API | Key in `X-Api-Key`, `Authorization: Bearer`, or `?apikey=` |
 | `PORTFOLIO_PASSWORD` | API, Fineco, sync | Password for the encrypted `.portfolio` |
-| `PORTFOLIO_GOOGLE_DRIVE_FILE_ID` | API, sync | Id (or URL) of the `.portfolio` on Drive |
+| `PORTFOLIO_GOOGLE_DRIVE_FILE_ID` | API, Fineco, sync | Id (or URL) of the `.portfolio` on Drive |
 | `PORTFOLIO_FILE` | local API | Path to a `.portfolio` on disk, if Drive is not configured |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | Drive/Sheets | Service account JSON contents |
 | `GOOGLE_APPLICATION_CREDENTIALS` | Drive/Sheets | Alternative: path to the JSON |
@@ -26,7 +26,7 @@ For Drive/Sheets: enable the **Google Drive API** and **Google Sheets API**, cre
 | `SYNC_GOOGLE_DRIVE_FILE_SKIP_ROWS` | sync | Rows to leave untouched at the top of each sheet. Default `0` |
 | `SYNC_GOOGLE_DRIVE_ROWS_CHUNK` | sync | Rows written per Sheets request. Default `100` |
 | `SYNC_GOOGLE_DRIVE_PREVIEW_ROWS` | sync | Visible rows per list in the preview. Default `20` |
-| `IMPORT_FINECO_XLS_SKIP_LINES` | Fineco | Rows to skip in the export. Default `13` |
+| `IMPORT_FINECO_XLS_SKIP_LINES` | Fineco | Preamble rows to skip. Default `13`. Override with `--skip-lines` |
 | `CACHE_TTL_MINUTES` | API | Default `15` |
 | `INCLUDE_RETIRED` | API | Default `true` |
 | `PORT` | API | Default `9292` |
@@ -61,21 +61,45 @@ docker run --env-file .env -p 9292:80 portfolio-performance-api
 
 ## Fineco import
 
-Imports transactions from a Fineco export (`.xls` / `.xlsx`) into a protobuf `.portfolio`. It only proposes rows dated **after** the account’s last transaction; you choose which ones to import. It uses `Data_Valuta`, `Entrate` → `DEPOSIT`, `Uscite` → `REMOVAL`. The note is `Descrizione Descrizione_Completa Categoria: Moneymap`. Before writing it creates a backup `name-YYYYMMDDTHHMMSS.portfolio`.
+`bin/import fineco` reads a Fineco export (`.xls` / `.xlsx`) and appends new transactions to the Drive `.portfolio` (`PORTFOLIO_GOOGLE_DRIVE_FILE_ID`). It downloads that file into `./import`, copies a backup `name-import-backup-YYYYMMDDTHHMMSS.portfolio`, imports into the downloaded file (not the backup), then uploads only the imported file.
 
-Needs an interactive terminal and `bundle install` without `BUNDLE_WITHOUT=utils`. Close Portfolio Performance before importing.
+It only proposes Excel rows whose identity hash is not already in the account (same SHA-256 as sync: account + date + amount + description + destination + security, matched 1:1). `--exclude REGEXP` drops Excel rows **before** that filter if the regexp matches **any column** (case-insensitive). `--skip-lines N` overrides `IMPORT_FINECO_XLS_SKIP_LINES` (default `13`, Fineco EUR preamble). USD exports need `--skip-lines=7`. `Data_Valuta`, `Entrate` → `DEPOSIT`, `Uscite` → `REMOVAL`. The note is `Descrizione Descrizione_Completa Categoria: Moneymap`.
+
+Fineco does not have security / offset-account columns, so those fields are set with regexps that scan **any column** of the current row (case-insensitive), after `--exclude` and before hashing. Both flags share the same `/REGEXP/` or `/REGEXP/VALUE` form and can be repeated (first match wins **per field**; security and offset are independent, so one Excel row can set both):
+
+- If the regexp has a capture group (`(.+?)`, …), the captured text is the value.
+- Otherwise the fixed `VALUE` after the last `/` is used.
+
+`--match-security` with no spec defaults to `/Compravendita Titoli\s+(.+?)\s+Qta/`, which matches `Compravendita Titoli AMAZON.COM Qta/Val.nom. 20,000000` and captures `AMAZON.COM`. The same row can also take a fixed offset account, e.g. `--match-offset-account "/Compravendita Titoli/fineco00109494"`.
+
+The security name and offset account must already exist in the `.portfolio` (by name or UUID). Offset may be a **cash account** (`otherAccount`) or a **securities account** (`portfolio`). Import aborts if they do not.
+
+Needs an interactive terminal and `bundle install` without `BUNDLE_WITHOUT=utils`. Share the `.portfolio` as **Editor**. Close Portfolio Performance before importing.
 
 ```bash
-ruby utils/import-fineco.rb EUR010069756 $HOME/finance/portfolio1.portfolio ./movements.xlsx
+bin/import fineco EUR010069756 ./movements.xlsx
+bin/import fineco EUR010069756 test ./movements.xlsx
+bin/import fineco "EUR010069756 test" ./movements.xlsx --exclude "compravendita valute"
+bin/import fineco USD010069756 import/test_usd.xlsx --skip-lines=7
+bin/import fineco EUR010069756 import/test_eur.xlsx \
+  --match-security "/Compravendita Titoli (.+?) Qta/" \
+  --match-offset-account "/Compravendita Titoli/fineco00109494" \
+  --match-offset-account "/Compravendita Divise/USD010069756"
+bin/import fineco USD010069756 import/test_usd.xlsx --skip-lines=7 \
+  --match-security "/Compravendita Titoli (.+?) Qta/" \
+  --match-offset-account "/Compravendita Titoli/fineco00109494" \
+  --match-offset-account "/Compravendita Divise/EUR010069756"
 ```
 
-↑/↓ to move, space to select, first row `toggle all`, Enter to confirm, then `y`. Password: `PORTFOLIO_PASSWORD`, or you are prompted.
+Account names may contain spaces: quotes are optional. The last argument is the Excel file; everything before it is the account name.
+
+Preview shows **EXCLUDED** first (every matching `--exclude` row), then **EXISTING** (already in the portfolio by hash), then **IMPORT**. Arrows scroll only IMPORT. Keys: ↑/↓ one row, `u`/`v` page, **Y** import, **Esc** skip. Password: `PORTFOLIO_PASSWORD`. Sample export: `import/test.xlsx`.
 
 ## Spreadsheet sync
 
 Aligns transactions both ways for every deposit and securities account in the Drive `.portfolio` (`PORTFOLIO_GOOGLE_DRIVE_FILE_ID`) with a spreadsheet (`SYNC_GOOGLE_DRIVE_FILE_ID`). For each account it prepares two plans, shows the **PORTFOLIO** and **SPREADSHEET** lists, then asks what to write.
 
-Identity: SHA-256 hash of account + date + amount + description + destination (recomputed at runtime, not stored). Create-or-update, no deletes. Spreadsheet type wins; the Portfolio Performance UUID is kept. `amount` is a number with `.` decimal (US locale sheet). Writes in chunks of `SYNC_GOOGLE_DRIVE_ROWS_CHUNK` rows.
+Identity: SHA-256 hash of account + date + amount + description + destination + security (recomputed at runtime, not stored). Create-or-update, no deletes. Spreadsheet type wins; the Portfolio Performance UUID is kept. `amount` is a number with `.` decimal (US locale sheet). Writes in chunks of `SYNC_GOOGLE_DRIVE_ROWS_CHUNK` rows.
 
 Share the spreadsheet and `.portfolio` as **Editor**. Close Portfolio Performance before syncing.
 

@@ -19,13 +19,19 @@ class TransactionSyncTest < Minitest::Test
     other_note = PortfolioPerformanceApi::TransactionSync.identity_id("EUR010069756", date, -9_900, "VISA DEBIT ")
     other_account = PortfolioPerformanceApi::TransactionSync.identity_id("USD1", date, -9_900, "VISA DEBIT")
     other_dest = PortfolioPerformanceApi::TransactionSync.identity_id("EUR010069756", date, -9_900, "VISA DEBIT", "USD1")
+    other_security = PortfolioPerformanceApi::TransactionSync.identity_id(
+      "EUR010069756", date, -9_900, "VISA DEBIT", "", "AMAZON.COM"
+    )
 
     assert_equal first, same
     assert_equal first, other_note
     refute_equal first, other_amount
     refute_equal first, other_account
     refute_equal first, other_dest
+    refute_equal first, other_security
+    refute_equal other_dest, other_security
     assert_match(/\A[\da-f]{64}\z/, first)
+    assert_equal first, PortfolioPerformanceApi::TransactionIdentity.id("EUR010069756", date, -9_900, "VISA DEBIT")
   end
 
   def test_from_proto_and_sheet_row_share_identity

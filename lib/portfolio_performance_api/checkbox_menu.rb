@@ -20,7 +20,7 @@ module PortfolioPerformanceApi
     end
 
     def run
-      raise ArgumentError, "import-fineco needs an interactive terminal" unless $stdin.tty?
+      raise ArgumentError, "needs an interactive terminal" unless $stdin.tty?
 
       $stdout.print @cursor.hide
       $stdout.sync = true

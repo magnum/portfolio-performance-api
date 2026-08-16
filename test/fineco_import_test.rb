@@ -72,6 +72,41 @@ class FinecoImportTest < Minitest::Test
     assert_equal "Pagamento Visa Debit CAFFETT.GELAT. Categoria: Hotel Ristoranti e Viaggi", rows[1].description
   end
 
+  def test_skip_lines_seven_reads_usd_style_export
+    rows = PortfolioPerformanceApi::FinecoXls.parse_rows(
+      [
+        ["Conto Corrente: USD010069756"],
+        ["Intestazione Conto Corrente"],
+        ["Periodo Dal: 18/05/2026"],
+        [],
+        ["Risultati Ricerca"],
+        [],
+        ["Data", "Data_Valuta", "Entrate", "Uscite", "Descrizione", "Descrizione_Completa"],
+        [Date.new(2026, 5, 16), Date.new(2026, 5, 16), nil, -100, "Bonifico", "Test USD"],
+        ["16/05/2024", "16/05/2024", "50,00", nil, "Bonifico", "Entrata"]
+      ],
+      skip_lines: 7
+    )
+
+    assert_equal 2, rows.size
+    assert_equal Date.new(2026, 5, 16), rows[0].date
+    assert_equal :REMOVAL, rows[0].type
+    assert_equal 10_000, rows[0].amount_cents
+    assert_equal "Bonifico Test USD", rows[0].description
+    assert_equal Date.new(2024, 5, 16), rows[1].date
+    assert_equal :DEPOSIT, rows[1].type
+    assert_equal 5_000, rows[1].amount_cents
+  end
+
+  def test_parse_import_test_usd_xlsx
+    path = File.expand_path("../import/test_usd.xlsx", __dir__)
+    skip "missing import/test_usd.xlsx" unless File.file?(path)
+
+    rows = PortfolioPerformanceApi::FinecoXls.parse(path, skip_lines: 7)
+    refute_empty rows
+    assert rows.any? { |row| row.description.match?(/Compravendita Titoli/i) }
+  end
+
   def test_default_skip_lines_from_env
     previous = ENV["IMPORT_FINECO_XLS_SKIP_LINES"]
     ENV.delete("IMPORT_FINECO_XLS_SKIP_LINES")
@@ -99,16 +134,286 @@ class FinecoImportTest < Minitest::Test
     assert_equal 2_550, rows[1].amount_cents
   end
 
-  def test_newer_than_filters_strictly_after_last_date
-    rows = [
-      PortfolioPerformanceApi::FinecoXls::Row.new(date: Date.new(2024, 1, 10), description: "old", amount_cents: 100, type: :DEPOSIT),
-      PortfolioPerformanceApi::FinecoXls::Row.new(date: Date.new(2024, 1, 15), description: "same", amount_cents: 100, type: :DEPOSIT),
-      PortfolioPerformanceApi::FinecoXls::Row.new(date: Date.new(2024, 1, 16), description: "new", amount_cents: 100, type: :DEPOSIT)
-    ]
+  def test_partition_existing_uses_identity_hash_one_to_one
+    client = protobuf_client
+    account = PortfolioPerformanceApi::FinecoImport.find_account(client, "Conto corrente")
+    visa = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 15),
+      description: "VISA DEBIT",
+      amount_cents: 9_900,
+      type: :REMOVAL
+    )
+    stipendio = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 16),
+      description: "Stipendio",
+      amount_cents: 100_000,
+      type: :DEPOSIT
+    )
+    PortfolioPerformanceApi::FinecoImport.append!(client, account, [visa])
 
-    newer = PortfolioPerformanceApi::FinecoImport.newer_than(rows, Date.new(2024, 1, 15))
-    assert_equal ["new"], newer.map(&:description)
-    assert_equal rows, PortfolioPerformanceApi::FinecoImport.newer_than(rows, nil)
+    existing, missing = PortfolioPerformanceApi::FinecoImport.partition_existing(
+      [visa, visa, stipendio], client, account
+    )
+
+    assert_equal ["VISA DEBIT"], existing.map(&:description)
+    assert_equal ["VISA DEBIT", "Stipendio"], missing.map(&:description)
+  end
+
+  def test_fineco_row_and_proto_share_identity
+    account = PortfolioPerformanceApi::Proto::PAccount.new(
+      uuid: "acc-cash",
+      name: "EUR010069756",
+      currencyCode: "EUR"
+    )
+    row = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 15),
+      description: "VISA DEBIT CRYPTO TAX",
+      amount_cents: 9_900,
+      type: :REMOVAL
+    )
+    tx = PortfolioPerformanceApi::FinecoImport.build_transaction(row, account)
+    proto = PortfolioPerformanceApi::TransactionSync.from_proto(tx, account)
+
+    assert_equal proto.id, PortfolioPerformanceApi::FinecoImport.identity_for(row, account)
+    assert_equal proto.id, PortfolioPerformanceApi::TransactionIdentity.id(
+      "EUR010069756", Date.new(2026, 8, 15), -9_900, "VISA DEBIT CRYPTO TAX"
+    )
+  end
+
+  def test_default_security_regexp_extracts_name_between_titoli_and_qta
+    text = "Compravendita Titoli AMAZON.COM Qta/Val.nom. 20,000000"
+    regexp, fixed = PortfolioPerformanceApi::FinecoImport.parse_match_spec(
+      PortfolioPerformanceApi::FinecoImport::DEFAULT_SECURITY_SPEC
+    )
+
+    assert_equal "", fixed
+    assert_equal "AMAZON.COM", regexp.match(text)[1]
+    assert_equal "AMAZON.COM",
+                 PortfolioPerformanceApi::FinecoImport.value_from_cells([text], regexp, fixed)
+  end
+
+  def test_parse_match_spec_capture_or_fixed_value
+    regexp, fixed = PortfolioPerformanceApi::FinecoImport.parse_match_spec(
+      "/Compravendita Titoli (.+?) Qta/"
+    )
+    assert_equal "", fixed
+    assert_equal "AMAZON.COM", regexp.match("Compravendita Titoli AMAZON.COM Qta/Val.nom. 20,000000")[1]
+
+    regexp, account = PortfolioPerformanceApi::FinecoImport.parse_offset_spec(
+      "/Compravendita Divise/USD010069756"
+    )
+    assert_equal "USD010069756", account
+    assert "Cambio valuta Compravendita Divise".match?(regexp)
+    refute "Stipendio".match?(regexp)
+
+    regexp, account = PortfolioPerformanceApi::FinecoImport.parse_match_spec(
+      "/Compravendita Titoli/fineco00109494"
+    )
+    assert_equal "fineco00109494", account
+    assert "Compravendita Titoli AMAZON.COM Qta/Val.nom. 20,000000".match?(regexp)
+  end
+
+  def test_apply_matches_sets_security_and_offset_account_from_any_column
+    buy = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 15),
+      description: "Compravendita Titoli",
+      amount_cents: 9_900,
+      type: :REMOVAL,
+      raw: ["15/08/2026", "Compravendita Titoli AMAZON.COM Qta/Val.nom. 20,000000"]
+    )
+    fx = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 14),
+      description: "Cambio valuta",
+      amount_cents: 475_696,
+      type: :DEPOSIT,
+      raw: ["Cambio valuta", "Compravendita Divise"]
+    )
+    other = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 16),
+      description: "Stipendio",
+      amount_cents: 100_000,
+      type: :DEPOSIT,
+      raw: ["Stipendio", "Ord: ACME"]
+    )
+
+    PortfolioPerformanceApi::FinecoImport.apply_matches!(
+      [buy, fx, other],
+      ["/Compravendita Titoli (.+?) Qta/"],
+      ["/Compravendita Titoli/fineco00109494", "/Compravendita Divise/USD010069756"]
+    )
+
+    assert_equal "AMAZON.COM", buy.security
+    assert_equal "fineco00109494", buy.offset_account
+    assert_nil fx.security
+    assert_equal "USD010069756", fx.offset_account
+    assert_nil other.security
+    assert_nil other.offset_account
+  end
+
+  def test_apply_matches_capture_wins_over_fixed_value
+    row = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 15),
+      description: "Compravendita Titoli AMAZON.COM Qta/Val.nom. 20,000000",
+      amount_cents: 1_000,
+      type: :REMOVAL,
+      raw: ["Compravendita Titoli AMAZON.COM Qta/Val.nom. 20,000000"]
+    )
+    PortfolioPerformanceApi::FinecoImport.apply_matches!(
+      [row],
+      ["/Compravendita Titoli (.+?) Qta/IGNORED"],
+      []
+    )
+
+    assert_equal "AMAZON.COM", row.security
+  end
+
+  def test_apply_matches_first_pattern_wins
+    row = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 15),
+      description: "Compravendita Titoli AMAZON.COM Qta/Val.nom. 20,000000",
+      amount_cents: 1_000,
+      type: :REMOVAL,
+      raw: ["Compravendita Titoli AMAZON.COM Qta/Val.nom. 20,000000"]
+    )
+    PortfolioPerformanceApi::FinecoImport.apply_matches!(
+      [row],
+      ["/Compravendita Titoli (.+?) Qta/", "/Titoli (.+)$/"],
+      []
+    )
+
+    assert_equal "AMAZON.COM", row.security
+  end
+
+  def test_validate_matches_requires_known_security_and_account
+    client = protobuf_client
+    missing_security = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 15),
+      description: "buy",
+      amount_cents: 1_000,
+      type: :REMOVAL,
+      security: "AMAZON.COM"
+    )
+    error = assert_raises(ArgumentError) do
+      PortfolioPerformanceApi::FinecoImport.validate_matches!(client, [missing_security])
+    end
+    assert_includes error.message, "security not found: AMAZON.COM"
+
+    missing_account = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 15),
+      description: "fx",
+      amount_cents: 1_000,
+      type: :DEPOSIT,
+      offset_account: "USD010069756"
+    )
+    error = assert_raises(ArgumentError) do
+      PortfolioPerformanceApi::FinecoImport.validate_matches!(client, [missing_account])
+    end
+    assert_includes error.message, "offset account not found: USD010069756"
+  end
+
+  def test_identity_and_proto_include_security_and_offset_account
+    client = protobuf_client
+    account = PortfolioPerformanceApi::FinecoImport.find_account(client, "Conto corrente")
+    row = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 15),
+      description: "Compravendita Titoli VWCE Qta/Val.nom. 10,000000",
+      amount_cents: 9_900,
+      type: :REMOVAL,
+      security: "VWCE",
+      offset_account: "Risparmio"
+    )
+    tx = PortfolioPerformanceApi::FinecoImport.build_transaction(row, account, client: client)
+    proto = PortfolioPerformanceApi::TransactionSync.from_proto(
+      tx, account,
+      names: PortfolioPerformanceApi::TransactionSync.uuid_names(client),
+      security_names: PortfolioPerformanceApi::TransactionSync.security_names(client)
+    )
+
+    assert_equal "acc-savings", tx.otherAccount
+    assert_equal "sec-etf", tx.security
+    assert_equal proto.id, PortfolioPerformanceApi::FinecoImport.identity_for(row, account)
+    assert_equal proto.id, PortfolioPerformanceApi::TransactionIdentity.id(
+      "Conto corrente", Date.new(2026, 8, 15), -9_900,
+      "Compravendita Titoli VWCE Qta/Val.nom. 10,000000",
+      "Risparmio",
+      "VWCE"
+    )
+
+    existing, missing = PortfolioPerformanceApi::FinecoImport.partition_existing([row], client, account)
+    assert_empty existing
+    assert_equal [row], missing
+
+    PortfolioPerformanceApi::FinecoImport.append!(client, account, [row])
+    existing, missing = PortfolioPerformanceApi::FinecoImport.partition_existing([row], client, account)
+    assert_equal [row], existing
+    assert_empty missing
+  end
+
+  def test_securities_offset_sets_portfolio_not_other_account
+    client = protobuf_client
+    account = PortfolioPerformanceApi::FinecoImport.find_account(client, "Conto corrente")
+    row = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 15),
+      description: "Compravendita Titoli VWCE Qta/Val.nom. 10,000000",
+      amount_cents: 9_900,
+      type: :REMOVAL,
+      security: "VWCE",
+      offset_account: "Deposito titoli"
+    )
+
+    PortfolioPerformanceApi::FinecoImport.validate_matches!(client, [row])
+    tx = PortfolioPerformanceApi::FinecoImport.build_transaction(row, account, client: client)
+    proto = PortfolioPerformanceApi::TransactionSync.from_proto(
+      tx, account,
+      names: PortfolioPerformanceApi::TransactionSync.uuid_names(client),
+      security_names: PortfolioPerformanceApi::TransactionSync.security_names(client)
+    )
+
+    refute tx.has_otherAccount?
+    assert_equal "port-titoli", tx.portfolio
+    assert_equal "Deposito titoli", proto.destination
+    assert_equal proto.id, PortfolioPerformanceApi::FinecoImport.identity_for(row, account)
+  end
+
+  def test_exclude_matching_drops_rows_when_any_column_matches
+    rows = PortfolioPerformanceApi::FinecoXls.parse_rows([
+      ["Data_Valuta", "Entrate", "Uscite", "Descrizione", "Descrizione_Completa"],
+      ["01/06/2024", "10,00", "", "Stipendio", "Ord: ACME"],
+      ["02/06/2024", "100,00", "", "Cambio valuta", "Compravendita Divise"],
+      ["03/06/2024", "", "5,00", "Canone", "Conto"]
+    ])
+
+    kept = PortfolioPerformanceApi::FinecoXls.exclude_matching(rows, "compravendita valute|compravendita divise")
+    assert_equal ["Stipendio Ord: ACME", "Canone Conto"], kept.map(&:description)
+
+    excluded, also_kept = PortfolioPerformanceApi::FinecoXls.partition_excluded(
+      rows, "compravendita valute|compravendita divise"
+    )
+    assert_equal ["Cambio valuta Compravendita Divise"], excluded.map(&:description)
+    assert_equal kept.map(&:description), also_kept.map(&:description)
+
+    assert_equal rows, PortfolioPerformanceApi::FinecoXls.exclude_matching(rows, "")
+    assert_equal rows, PortfolioPerformanceApi::FinecoXls.exclude_matching(rows, nil)
+  end
+
+  def test_parse_import_test_xlsx_and_exclude_compravendita
+    path = File.expand_path("../import/test.xlsx", __dir__)
+    skip "missing import/test.xlsx" unless File.file?(path)
+
+    rows = PortfolioPerformanceApi::FinecoXls.parse(path)
+    assert_equal 692, rows.size
+
+    kept = PortfolioPerformanceApi::FinecoXls.exclude_matching(rows, "compravendita")
+    assert_equal 688, kept.size
+    refute kept.any? { |row| Array(row.raw).any? { |cell| cell.to_s.match?(/compravendita/i) } }
+  end
+
+  def test_parse_xlsx_does_not_warn_about_zip_entry_dates
+    path = %w[test_eur.xlsx test.xlsx].map { |name| File.expand_path("../import/#{name}", __dir__) }.find { |file| File.file?(file) }
+    skip "missing import xlsx" unless path
+
+    _stdout, stderr = capture_io { PortfolioPerformanceApi::FinecoXls.parse(path) }
+    refute_includes stderr, "invalid date/time in zip entry"
   end
 
   def test_find_account_by_name_and_uuid
@@ -117,6 +422,9 @@ class FinecoImportTest < Minitest::Test
     assert_equal "acc-cash", PortfolioPerformanceApi::FinecoImport.find_account(client, "conto corrente").uuid
     assert_equal "acc-savings", PortfolioPerformanceApi::FinecoImport.find_account(client, "acc-savings").uuid
     assert_nil PortfolioPerformanceApi::FinecoImport.find_account(client, "missing")
+    assert_nil PortfolioPerformanceApi::FinecoImport.find_account(client, "Deposito titoli")
+    assert_equal :securities, PortfolioPerformanceApi::FinecoImport.find_vehicle(client, "Deposito titoli").kind
+    assert_equal "port-titoli", PortfolioPerformanceApi::FinecoImport.find_vehicle(client, "Deposito titoli").uuid
   end
 
   def test_last_transaction_date_and_proto_mapping

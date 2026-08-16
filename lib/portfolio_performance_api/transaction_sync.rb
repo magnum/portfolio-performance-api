@@ -5,6 +5,8 @@ require "digest"
 require "securerandom"
 require "time"
 
+require_relative "transaction_identity"
+
 module PortfolioPerformanceApi
   module TransactionSync
     HEADERS = %w[date type amount currency description destination uuid].freeze
@@ -41,16 +43,8 @@ module PortfolioPerformanceApi
 
     module_function
 
-    def identity_id(account_name, date, signed_cents, description, destination = "")
-      Digest::SHA256.hexdigest(
-        [
-          account_name.to_s.strip,
-          date.strftime("%Y-%m-%d"),
-          Integer(signed_cents).to_s,
-          normalize_description(description),
-          destination.to_s.strip
-        ].join("\u001f")
-      )
+    def identity_id(account_name, date, signed_cents, description, destination = "", security = "")
+      TransactionIdentity.id(account_name, date, signed_cents, description, destination, security)
     end
 
     def signed_cents(type, amount_cents)
@@ -63,7 +57,7 @@ module PortfolioPerformanceApi
     end
 
     def normalize_description(value)
-      value.to_s.strip.gsub(/\s+/, " ")
+      TransactionIdentity.normalize_description(value)
     end
 
     def normalize_type(value, signed_cents = nil)
@@ -94,6 +88,10 @@ module PortfolioPerformanceApi
       vehicles(client).to_h { |vehicle| [vehicle.uuid, vehicle.name] }
     end
 
+    def security_names(client)
+      Array(client.securities).to_h { |security| [security.uuid, security.name.to_s] }
+    end
+
     def name_index(client)
       vehicles(client).each_with_object({}) do |vehicle, index|
         index[vehicle.name] ||= vehicle
@@ -108,7 +106,7 @@ module PortfolioPerformanceApi
       index[text] || index[text.downcase]
     end
 
-    def from_proto(tx, vehicle, names: {})
+    def from_proto(tx, vehicle, names: {}, security_names: {})
       vehicle = wrap_vehicle(vehicle)
       return unless belongs?(tx, vehicle)
       return unless tx.has_date?
@@ -116,9 +114,10 @@ module PortfolioPerformanceApi
       date = Time.at(tx.date.seconds).utc.to_date
       description = tx.has_note? ? normalize_description(tx.note) : ""
       destination = destination_name(tx, vehicle, names)
+      security = security_name(tx, security_names)
       cents = signed_cents(tx.type, tx.amount)
       Record.new(
-        id: identity_id(vehicle.name, date, cents, description, destination),
+        id: identity_id(vehicle.name, date, cents, description, destination, security),
         account_name: vehicle.name,
         date: date,
         type: tx.type.to_s,
@@ -201,7 +200,10 @@ module PortfolioPerformanceApi
     end
 
     def account_plan(client, vehicle, raw_rows, names: uuid_names(client), skip_rows: 0)
-      portfolio_records = client.transactions.filter_map { |tx| from_proto(tx, vehicle, names: names) }
+      secs = security_names(client)
+      portfolio_records = client.transactions.filter_map do |tx|
+        from_proto(tx, vehicle, names: names, security_names: secs)
+      end
       sheet_records = parse_sheet(raw_rows, vehicle.name, currency: vehicle.currency, skip_rows: skip_rows)
       plan(portfolio_records, sheet_records, names_index: name_index(client))
     end
@@ -388,6 +390,13 @@ module PortfolioPerformanceApi
       end
     end
 
+    def security_name(tx, names)
+      uuid = tx.respond_to?(:has_security?) && !tx.has_security? ? nil : tx.security
+      return "" if uuid.to_s.empty?
+
+      names[uuid].to_s.strip
+    end
+
     def destination_name(tx, vehicle, names)
       other_uuid =
         if vehicle.uuid == (tx.has_account? ? tx.account : nil)
@@ -464,7 +473,7 @@ module PortfolioPerformanceApi
       end
 
       client.transactions.find do |tx|
-        mapped = from_proto(tx, vehicle, names: names)
+        mapped = from_proto(tx, vehicle, names: names, security_names: security_names(client))
         mapped && mapped.id == record.id
       end
     end
@@ -530,7 +539,7 @@ module PortfolioPerformanceApi
     end
     private_class_method :merge, :same_row?, :same_proto?, :find_transaction,
                          :update_transaction!, :build_transaction, :wrap_vehicle, :belongs?,
-                         :destination_name, :destination_column, :assign_counterpart!,
+                         :destination_name, :security_name, :destination_column, :assign_counterpart!,
                          :lookup_name, :take_sheet_row!, :pick_destination
   end
 end
