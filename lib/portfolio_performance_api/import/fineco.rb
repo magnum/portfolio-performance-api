@@ -4,60 +4,57 @@ require "optparse"
 require "tty-screen"
 
 require_relative "../config"
-require_relative "../fineco_xls"
+require_relative "../errors"
 require_relative "../fineco_import"
-require_relative "../portfolio_store"
+require_relative "../fineco_xls"
 require_relative "../row_preview"
 
 module PortfolioPerformanceApi
   class Import
-    class Fineco < Import
+    class Fineco
+      def initialize(session: Session.new)
+        @session = session
+      end
+
       def run(argv)
         options = self.class.parse_argv(argv)
         abort "Fineco XLS not found: #{options[:xls]}" unless File.file?(options[:xls])
 
         backup = nil
         uploaded = false
-        session, loaded, backup = download_and_backup
+        drive, loaded, backup = @session.download_and_backup
         account = FinecoImport.find_account(loaded.client, options[:account])
         abort "deposit account not found: #{options[:account]}" unless account
 
         rows = FinecoXls.parse(options[:xls], skip_lines: options[:skip_lines])
-        excluded, kept = FinecoXls.partition_excluded(rows, options[:exclude])
-        FinecoImport.apply_matches!(kept, options[:match_security], options[:match_offset_account])
-        FinecoImport.assign_types!(kept, account, loaded.client)
-        FinecoImport.validate_matches!(loaded.client, kept)
-        existing, candidates = FinecoImport.partition_existing(kept, loaded.client, account)
-        last_date = FinecoImport.last_transaction_date(loaded.client, account.uuid)
+        result = FinecoImport.prepare(
+          loaded.client,
+          account,
+          rows,
+          security_specs: options[:match_security],
+          offset_specs: options[:match_offset_account],
+          exclude: options[:exclude]
+        )
 
-        if candidates.empty? && excluded.empty? && existing.empty?
+        if result.candidates.empty? && result.excluded.empty? && result.existing.empty?
           warn "no Fineco transactions found in #{options[:xls]}"
           return
         end
 
-        puts "Account #{account.name} (#{account.currencyCode})"
-        puts last_date ? "Last portfolio transaction: #{last_date}" : "No dated transactions on this account yet"
-        puts "Exclude: #{options[:exclude]}" if options[:exclude]
-        options[:match_security].each { |pattern| puts "Match security: #{pattern}" }
-        options[:match_offset_account].each { |spec| puts "Match offset account: #{spec}" }
-        puts "Already in portfolio: #{existing.size}" if existing.any?
-        puts "Backup: #{backup}"
-
-        choice = preview(account.name, candidates, excluded, existing, exclude: options[:exclude])
-        if choice != "Y"
+        print_summary(account, loaded.client, options, result, backup)
+        if preview(account.name, result, exclude: options[:exclude]) != "Y"
           puts "#{account.name}: skipped"
           return
         end
 
         repaired = FinecoImport.repair_cross_entries!(loaded.client)
-        imported = candidates.empty? ? 0 : FinecoImport.append!(loaded.client, account, candidates)
+        imported = result.candidates.empty? ? 0 : FinecoImport.append!(loaded.client, account, result.candidates)
         if imported.zero? && repaired.zero?
           warn "nothing to import"
           return
         end
 
-        PortfolioStore.save(loaded)
-        session.upload(PortfolioStore.dump(loaded))
+        @session.persist(loaded, drive)
         uploaded = true
         puts "Imported #{imported} transactions into #{loaded.path}" if imported.positive?
         puts "Repaired #{repaired} cross-entry UUIDs" if repaired.positive?
@@ -65,7 +62,7 @@ module PortfolioPerformanceApi
       rescue Error, ArgumentError, RegexpError => error
         abort error.message
       ensure
-        self.class.discard_backup(backup) unless uploaded
+        Session.discard_backup(backup) unless uploaded
       end
 
       def self.parse_argv(argv)
@@ -108,19 +105,9 @@ module PortfolioPerformanceApi
         options.merge(account: account, xls: File.expand_path(xls))
       end
 
-      def self.unquote(value)
-        text = value.to_s.strip
-        return text[1..-2] if text.match?(/\A(["']).*\1\z/)
-
-        text
-      end
-
       def self.discard_backup(path)
-        return if path.to_s.empty? || !File.file?(path)
-
-        File.delete(path)
+        Session.discard_backup(path)
       end
-      private_class_method :unquote
 
       def self.format_row(row, width: TTY::Screen.width)
         amount = format("%.2f", (row.amount_cents / 100.0).round(2))
@@ -138,15 +125,6 @@ module PortfolioPerformanceApi
           "#{prefix}#{security}#{note}#{dest}"
         end
       end
-
-      def self.truncate_note(text, max)
-        return "" if max <= 0
-        return text if text.length <= max
-        return "..."[0, max] if max <= 3
-
-        "#{text[0, max - 3]}..."
-      end
-      private_class_method :truncate_note
 
       def self.preview_sections(import_rows, excluded_rows, existing_rows = [], exclude: nil, width: TTY::Screen.width)
         sections = []
@@ -176,12 +154,39 @@ module PortfolioPerformanceApi
         sections
       end
 
+      def self.unquote(value)
+        text = value.to_s.strip
+        return text[1..-2] if text.match?(/\A(["']).*\1\z/)
+
+        text
+      end
+
+      def self.truncate_note(text, max)
+        return "" if max <= 0
+        return text if text.length <= max
+        return "..."[0, max] if max <= 3
+
+        "#{text[0, max - 3]}..."
+      end
+      private_class_method :unquote, :truncate_note
+
       private
 
-      def preview(account_name, rows, excluded_rows, existing_rows, exclude: nil)
+      def print_summary(account, client, options, result, backup)
+        last_date = FinecoImport.last_transaction_date(client, account.uuid)
+        puts "Account #{account.name} (#{account.currencyCode})"
+        puts last_date ? "Last portfolio transaction: #{last_date}" : "No dated transactions on this account yet"
+        puts "Exclude: #{options[:exclude]}" if options[:exclude]
+        options[:match_security].each { |pattern| puts "Match security: #{pattern}" }
+        options[:match_offset_account].each { |spec| puts "Match offset account: #{spec}" }
+        puts "Already in portfolio: #{result.existing.size}" if result.existing.any?
+        puts "Backup: #{backup}"
+      end
+
+      def preview(account_name, result, exclude: nil)
         RowPreview.new(
           account_name,
-          self.class.preview_sections(rows, excluded_rows, existing_rows, exclude: exclude),
+          self.class.preview_sections(result.candidates, result.excluded, result.existing, exclude: exclude),
           page_size: Config.sync_preview_rows,
           prompt: "[#{account_name}] import (Y)es or Esc/Q to skip?",
           choices: %w[Y]

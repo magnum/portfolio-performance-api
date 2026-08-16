@@ -6,6 +6,7 @@ require "fileutils"
 require "tmpdir"
 
 require_relative "../lib/portfolio_performance_api/import"
+require_relative "../lib/portfolio_performance_api/fineco_import"
 require_relative "../lib/portfolio_performance_api/fineco_xls"
 
 class ImportTest < Minitest::Test
@@ -16,6 +17,7 @@ class ImportTest < Minitest::Test
     assert_equal PortfolioPerformanceApi::Import::Fineco,
                  PortfolioPerformanceApi::Import.provider_class("FINECO")
     assert_nil PortfolioPerformanceApi::Import.provider_class("unknown")
+    refute_operator PortfolioPerformanceApi::Import::Fineco, :<, PortfolioPerformanceApi::Import
   end
 
   def test_backup_path_uses_import_backup_timestamp

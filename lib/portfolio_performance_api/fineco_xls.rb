@@ -67,15 +67,22 @@ module PortfolioPerformanceApi
       bytes = File.binread(path)
       return read_html(path) if html_spreadsheet?(bytes)
 
-      require "roo"
-      require "roo-xls"
-      require "zip"
+      require_spreadsheet_gems
 
       without_zip_date_warnings do
         book = Roo::Spreadsheet.open(path.to_s)
         sheet = book.sheet(0)
         (sheet.first_row..sheet.last_row).map { |index| sheet.row(index) }
       end
+    end
+
+    def self.require_spreadsheet_gems
+      require "roo"
+      require "roo-xls"
+      require "zip"
+    rescue Gem::ConflictError => error
+      raise LoadError,
+            "#{error.message}. Use the Gemfile gems: bundle exec rake test"
     end
 
     def self.without_zip_date_warnings
@@ -222,6 +229,6 @@ module PortfolioPerformanceApi
     end
     private_class_method :read_sheet, :read_html, :html_spreadsheet?, :find_header, :find_column,
                          :build_row, :build_note, :cell_text, :parse_date, :parse_amount, :date_like?,
-                         :without_zip_date_warnings
+                         :require_spreadsheet_gems, :without_zip_date_warnings
   end
 end
