@@ -178,6 +178,16 @@ module PortfolioPerformanceApi
       Array(sheet_records).find { |record| record.id == identity }
     end
 
+    def take_sheet_row!(remaining, proto)
+      if proto.uuid.to_s != ""
+        index = remaining.find_index { |row| row.uuid.to_s == proto.uuid.to_s }
+        return remaining.delete_at(index) if index
+      end
+
+      index = remaining.find_index { |row| row.id == proto.id }
+      remaining.delete_at(index) if index
+    end
+
     def to_sheet_row(record)
       [
         record.date.strftime("%Y-%m-%d"),
@@ -218,9 +228,10 @@ module PortfolioPerformanceApi
       create_portfolio = []
       update_sheet = []
       update_portfolio = []
+      remaining = Array(sheet_records).dup
 
       Array(portfolio_records).each do |proto|
-        row = find_sheet_row(sheet_records, proto.id)
+        row = take_sheet_row!(remaining, proto)
         if row.nil?
           create_sheet << proto
         else
@@ -233,15 +244,9 @@ module PortfolioPerformanceApi
         end
       end
 
-      Array(sheet_records).each do |row|
-        next if Array(portfolio_records).any? { |proto| proto.id == row.id }
-
-        create_portfolio << row
-      end
-
       Plan.new(
         create_sheet: create_sheet,
-        create_portfolio: create_portfolio,
+        create_portfolio: remaining,
         update_sheet: update_sheet,
         update_portfolio: update_portfolio
       )
@@ -509,6 +514,7 @@ module PortfolioPerformanceApi
     end
     private_class_method :merge, :same_row?, :same_proto?, :find_transaction,
                          :update_transaction!, :build_transaction, :wrap_vehicle, :belongs?,
-                         :destination_name, :destination_column, :assign_counterpart!, :lookup_name
+                         :destination_name, :destination_column, :assign_counterpart!,
+                         :lookup_name, :take_sheet_row!
   end
 end

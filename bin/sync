@@ -1,0 +1,13 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "bundler/setup"
+require "dotenv"
+
+root = File.expand_path("..", __dir__)
+Dotenv.load(File.join(root, ".env"))
+$LOAD_PATH.unshift(File.join(root, "lib"))
+
+require "portfolio_performance_api/sync"
+
+PortfolioPerformanceApi::Sync.run

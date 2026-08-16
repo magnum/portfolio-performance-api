@@ -80,7 +80,7 @@ Identità: hash SHA-256 di conto + data + importo + descrizione + destinazione (
 Condividi spreadsheet e `.portfolio` come **Editor**. Chiudi Portfolio Performance prima del sync.
 
 ```bash
-ruby bin/utils/sync.rb
+bin/sync
 ```
 
 Tasti: ↑/↓ una riga, `u`/`v` pagina, **S** solo spreadsheet, **P** solo portfolio, **B** entrambi, **Esc** salta l’account. Il `.portfolio` viene ricaricato su Drive una sola volta alla fine se almeno un account ha scelto P o B.

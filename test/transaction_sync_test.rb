@@ -139,6 +139,51 @@ class TransactionSyncTest < Minitest::Test
     assert_equal ["p2"], plan.update_sheet.map(&:uuid)
   end
 
+  def test_plan_pairs_duplicate_identities_one_to_one
+    date = Date.new(2022, 1, 28)
+    note = "Bonifico SEPA Italia | Ord: INPS"
+    portfolio = [
+      record("EUR", date, 3_000, note, "DEPOSIT", "u1"),
+      record("EUR", date, 3_000, note, "DEPOSIT", "u2"),
+      record("EUR", date, 3_000, note, "DEPOSIT", "u3")
+    ]
+    sheet = [
+      record("EUR", date, 3_000, note, "DEPOSIT", nil, 3),
+      record("EUR", date, 3_000, note, "DEPOSIT", nil, 4),
+      record("EUR", date, 3_000, note, "DEPOSIT", nil, 5)
+    ]
+
+    plan = PortfolioPerformanceApi::TransactionSync.plan(portfolio, sheet)
+    assert_equal [3, 4, 5], plan.update_sheet.map(&:row_number)
+    assert_equal %w[u1 u2 u3], plan.update_sheet.map(&:uuid)
+    assert_empty plan.create_sheet
+    assert_empty plan.create_portfolio
+
+    second = PortfolioPerformanceApi::TransactionSync.plan(portfolio, plan.update_sheet)
+    assert_empty second.update_sheet
+    assert_empty second.create_sheet
+    assert_empty second.create_portfolio
+    assert_empty second.update_portfolio
+  end
+
+  def test_plan_matches_uuid_before_shared_identity
+    date = Date.new(2022, 1, 28)
+    note = "Bonifico SEPA Italia | Ord: INPS"
+    portfolio = [
+      record("EUR", date, 3_000, note, "DEPOSIT", "u1"),
+      record("EUR", date, 3_000, note, "DEPOSIT", "u2")
+    ]
+    sheet = [
+      record("EUR", date, 3_000, note, "DEPOSIT", "u2", 3),
+      record("EUR", date, 3_000, note, "DEPOSIT", "u1", 4)
+    ]
+
+    plan = PortfolioPerformanceApi::TransactionSync.plan(portfolio, sheet)
+    assert_empty plan.update_sheet
+    assert_empty plan.create_sheet
+    assert_empty plan.create_portfolio
+  end
+
   def test_find_sheet_row_by_runtime_hash
     rows = [
       record("EUR", Date.new(2026, 8, 12), -8_313, "Iper", "REMOVAL", "a", 3),
