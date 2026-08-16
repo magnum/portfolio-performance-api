@@ -19,6 +19,12 @@ group :development do
   gem "kamal", "~> 2.7"
 end
 
+group :utils do
+  gem "tty-prompt", "~> 0.23"
+  gem "roo", "~> 2.10"
+  gem "roo-xls", "~> 1.2"
+end
+
 group :test do
   gem "rack-test", "~> 2.2"
   gem "minitest", "~> 5.25"

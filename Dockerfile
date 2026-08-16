@@ -6,7 +6,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
   && rm -rf /var/lib/apt/lists/*
 
 COPY Gemfile Gemfile.lock ./
-ENV BUNDLE_WITHOUT=development:test \
+ENV BUNDLE_WITHOUT=development:test:utils \
     RACK_ENV=production \
     PORT=80
 

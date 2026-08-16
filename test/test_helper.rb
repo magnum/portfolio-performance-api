@@ -184,9 +184,9 @@ module PortfolioFixtures
     )
   end
 
-  def zip_protobuf(client = protobuf_client)
+  def zip_protobuf(client = protobuf_client, entry: "data.portfolio")
     Zip::OutputStream.write_buffer do |zio|
-      zio.put_next_entry("data.portfolio")
+      zio.put_next_entry(entry)
       zio.write("PPPBV1" + client.to_proto)
     end.string
   end

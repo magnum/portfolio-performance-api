@@ -30,6 +30,7 @@ cp env.example .env
 | --- | --- | --- |
 | `API_KEY` | sì | Chiave in `X-Api-Key`, `Authorization: Bearer` o `?apikey=` |
 | `PORTFOLIO_PASSWORD` | per file cifrati | Password del `.portfolio` |
+| `IMPORT_FINECO_XLS_SKIP_LINES` | no | Righe da saltare nell’export Fineco. Default `13` |
 | `GOOGLE_DRIVE_FILE_ID` | sì* | Id (o URL) del file su Drive |
 | `GOOGLE_SERVICE_ACCOUNT_JSON` | sì* | Contenuto JSON del service account |
 | `GOOGLE_APPLICATION_CREDENTIALS` | alternativa | Path al JSON del service account |
@@ -124,6 +125,16 @@ In development Sinatra ricarica i file in `lib/` a ogni richiesta, senza riavvia
 `GET /health` è pubblico. `GET /` è uguale a `GET /accounts`. Header, Bearer e `?apikey=` sono equivalenti; se è presente l’header, vince lui.
 
 Ogni riga ha `kind`: `deposit` (conto liquido, saldo da movimenti di cassa) oppure `securities` (conto titoli, valore di mercato al prezzo più recente, senza conversione FX). I conti titoli includono anche `reference_account_uuid`.
+
+## Import Fineco
+
+`utils/import-fineco.rb` importa movimenti da un export Fineco (`.xls` / `.xlsx`) in un `.portfolio` protobuf. Serve un terminale interattivo e le gemme del gruppo `utils` (`bundle install` senza `BUNDLE_WITHOUT`).
+
+```bash
+ruby utils/import-fineco.rb EUR010069756 $HOME/finance/portfolio1.portfolio ./movements.xlsx
+```
+
+Parametri: nome (o UUID) del conto deposito, file `.portfolio`, export Fineco. `IMPORT_FINECO_XLS_SKIP_LINES` (default `13`) salta le righe di intestazione Fineco. La data usata è `Data_Valuta` (non `Data_Operazione`). L’importo è quello valorizzato in `Entrate` (`DEPOSIT`) o `Uscite` (`REMOVAL`, anche se negativo). La note in Portfolio Performance è `Descrizione Descrizione_Completa Categoria: Moneymap`. Vengono proposte solo le righe con data **successiva** all’ultima transazione di quel conto. ↑/↓ per muoversi, spazio per selezionare, la prima riga `toggle all` seleziona o deseleziona tutto, Invio per confermare. Dopo `y` viene creato un backup `nome-YYYYMMDDTHHMMSS.portfolio` e le transazioni vengono scritte nel file originale. La password del portafoglio cifrato è `PORTFOLIO_PASSWORD` oppure viene chiesta.
 
 ## Test
 

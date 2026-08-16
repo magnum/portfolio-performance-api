@@ -86,8 +86,10 @@ message PTransaction {
   string currencyCode = 10;
   int64 amount = 11;
   optional int64 shares = 12;
+  optional string note = 13;
   optional string security = 14;
   repeated PTransactionUnit units = 15;
+  google.protobuf.Timestamp updatedAt = 16;
 }
 
 message PClient {
