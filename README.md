@@ -90,6 +90,8 @@ Keys: ↑/↓ one row, `u`/`v` page, **S** spreadsheet only, **P** portfolio onl
 
 Columns: `date`, `type`, `amount`, `currency`, `description`, `destination`, `uuid`. `SYNC_GOOGLE_DRIVE_FILE_SKIP_ROWS` leaves the first N rows untouched.
 
+Sheet tabs are named `deposit - {account}` and `securities - {account}` so a cash account and a securities account can share the same Portfolio Performance name.
+
 ## Tests
 
 The demo file `test/test.portfolio` (password `portfolio`) is Portfolio Performance’s sample portfolio. Sync tests always use it. Live tests (`test/sync_sheets_test.rb`) empty the `SYNC_GOOGLE_DRIVE_FILE_ID_TEST` spreadsheet, create one sheet per account, and **leave the data** at the end (no cleanup). The spreadsheet must be shared as Editor with the service account.

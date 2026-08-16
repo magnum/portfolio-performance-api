@@ -7,7 +7,9 @@ module PortfolioPerformanceApi
   class SheetsClient
     SPREADSHEET_URI = "https://sheets.googleapis.com/v4/spreadsheets/%s"
     EDIT_URI = "https://docs.google.com/spreadsheets/d/%s/edit"
-    DATA_RANGE = "A:G"
+    DEPOSIT_PREFIX = "deposit - "
+    SECURITIES_PREFIX = "securities - "
+    TITLE_MAX = 100
 
     attr_reader :spreadsheet_id
 
@@ -36,7 +38,7 @@ module PortfolioPerformanceApi
 
     def sheet_properties
       uri = URI(format(SPREADSHEET_URI, @spreadsheet_id))
-      uri.query = URI.encode_www_form("fields" => "sheets.properties(sheetId,title)")
+      uri.query = URI.encode_www_form("fields" => "sheets.properties(sheetId,title,gridProperties(rowCount,columnCount))")
       payload = JSON.parse(@session.api_request(uri).body)
       Array(payload["sheets"]).map { |sheet| sheet["properties"] || {} }
     end
@@ -74,7 +76,11 @@ module PortfolioPerformanceApi
     end
 
     def write_chunks(title, grid, start_row:, chunk_size: 100)
-      TransactionSync.sheet_chunks(grid, start_row: start_row, chunk_size: chunk_size).each do |chunk|
+      chunks = TransactionSync.sheet_chunks(grid, start_row: start_row, chunk_size: chunk_size)
+      return if chunks.empty?
+
+      ensure_row_count(title, chunks.last[:end_row])
+      chunks.each do |chunk|
         write_range(title, "A#{chunk[:start_row]}:G#{chunk[:end_row]}", chunk[:values])
       end
     end
@@ -112,21 +118,48 @@ module PortfolioPerformanceApi
       "'#{title.to_s.gsub("'", "''")}'"
     end
 
-    def self.sanitize_title(name)
-      title = name.to_s.gsub(%r{[:\\/?*\[\]]}, "-").strip
-      title = "Account" if title.empty?
-      title[0, 100]
+    def self.prefix_for(kind)
+      kind.to_s == "securities" ? SECURITIES_PREFIX : DEPOSIT_PREFIX
     end
 
-    def self.unique_titles(names)
+    def self.sheet_kind(title)
+      text = title.to_s
+      return :securities if text.downcase.start_with?(SECURITIES_PREFIX)
+      return :deposit if text.downcase.start_with?(DEPOSIT_PREFIX)
+
+      nil
+    end
+
+    def self.account_name(title)
+      text = title.to_s
+      prefix = prefix_for(sheet_kind(text)) if sheet_kind(text)
+      return text unless prefix && text.downcase.start_with?(prefix.downcase)
+
+      text[prefix.size..]
+    end
+
+    def self.sheet_title(kind, name)
+      prefix = prefix_for(kind)
+      "#{prefix}#{sanitize_title(name, max: TITLE_MAX - prefix.size)}"
+    end
+
+    def self.sanitize_title(name, max: TITLE_MAX)
+      title = name.to_s.gsub(%r{[:\\/?*\[\]]}, "-").strip
+      title = "Account" if title.empty?
+      title[0, max]
+    end
+
+    def self.unique_titles(vehicles)
       used = {}
-      Array(names).map do |name|
-        base = sanitize_title(name)
-        title = base
+      Array(vehicles).map do |vehicle|
+        kind, name = kind_and_name(vehicle)
+        prefix = prefix_for(kind)
+        title = sheet_title(kind, name)
         index = 2
         while used[title]
           suffix = " (#{index})"
-          title = "#{base[0, [100 - suffix.size, 1].max]}#{suffix}"
+          name_max = [TITLE_MAX - prefix.size - suffix.size, 1].max
+          title = "#{prefix}#{sanitize_title(name, max: name_max)}#{suffix}"
           index += 1
         end
         used[title] = true
@@ -134,7 +167,39 @@ module PortfolioPerformanceApi
       end
     end
 
+    def self.kind_and_name(vehicle)
+      if vehicle.respond_to?(:kind) && vehicle.respond_to?(:name)
+        [vehicle.kind, vehicle.name]
+      else
+        [:deposit, vehicle.to_s]
+      end
+    end
+    private_class_method :kind_and_name
+
     private
+
+    def ensure_row_count(title, rows)
+      props = sheet_properties.find { |item| item["title"] == title }
+      return unless props
+
+      current = Integer(props.dig("gridProperties", "rowCount") || 0)
+      needed = Integer(rows)
+      return if needed <= current
+
+      batch_update(
+        [
+          {
+            updateSheetProperties: {
+              properties: {
+                sheetId: props["sheetId"],
+                gridProperties: { rowCount: needed }
+              },
+              fields: "gridProperties.rowCount"
+            }
+          }
+        ]
+      )
+    end
 
     def batch_update(requests)
       uri = URI("#{format(SPREADSHEET_URI, @spreadsheet_id)}:batchUpdate")

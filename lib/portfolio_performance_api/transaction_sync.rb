@@ -203,7 +203,7 @@ module PortfolioPerformanceApi
     def account_plan(client, vehicle, raw_rows, names: uuid_names(client), skip_rows: 0)
       portfolio_records = client.transactions.filter_map { |tx| from_proto(tx, vehicle, names: names) }
       sheet_records = parse_sheet(raw_rows, vehicle.name, currency: vehicle.currency, skip_rows: skip_rows)
-      plan(portfolio_records, sheet_records)
+      plan(portfolio_records, sheet_records, names_index: name_index(client))
     end
 
     def split_plan(plan)
@@ -223,7 +223,7 @@ module PortfolioPerformanceApi
       ]
     end
 
-    def plan(portfolio_records, sheet_records)
+    def plan(portfolio_records, sheet_records, names_index: {})
       create_sheet = []
       create_portfolio = []
       update_sheet = []
@@ -235,7 +235,7 @@ module PortfolioPerformanceApi
         if row.nil?
           create_sheet << proto
         else
-          merged = merge(proto, row)
+          merged = merge(proto, row, names_index)
           unless same_row?(row, merged)
             merged.row_number = row.row_number
             update_sheet << merged
@@ -410,7 +410,7 @@ module PortfolioPerformanceApi
       labels.index { |label| label.match?(/destination|destinat|offset|other/) }
     end
 
-    def merge(proto, row)
+    def merge(proto, row, names_index = {})
       Record.new(
         id: proto.id,
         account_name: proto.account_name,
@@ -419,10 +419,26 @@ module PortfolioPerformanceApi
         signed_cents: proto.signed_cents,
         currency: proto.currency,
         description: proto.description,
-        destination: row.destination.to_s.empty? ? proto.destination : row.destination,
+        destination: pick_destination(proto, row, names_index),
         uuid: proto.uuid.to_s.empty? ? row.uuid : proto.uuid,
         row_number: row.row_number
       )
+    end
+
+    def pick_destination(proto, row, names_index)
+      sheet_dest = row.destination.to_s.strip
+      proto_dest = proto.destination.to_s.strip
+      return proto_dest if sheet_dest.empty?
+      return sheet_dest if proto_dest.empty? || sheet_dest == proto_dest
+
+      sheet_hit = lookup_name(names_index, sheet_dest)
+      proto_hit = lookup_name(names_index, proto_dest)
+      if proto_hit && (sheet_hit.nil? || sheet_hit.uuid == proto_hit.uuid ||
+                       sheet_hit.name == proto.account_name)
+        proto_dest
+      else
+        sheet_dest
+      end
     end
 
     def same_row?(row, merged)
@@ -515,6 +531,6 @@ module PortfolioPerformanceApi
     private_class_method :merge, :same_row?, :same_proto?, :find_transaction,
                          :update_transaction!, :build_transaction, :wrap_vehicle, :belongs?,
                          :destination_name, :destination_column, :assign_counterpart!,
-                         :lookup_name, :take_sheet_row!
+                         :lookup_name, :take_sheet_row!, :pick_destination
   end
 end

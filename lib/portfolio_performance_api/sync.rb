@@ -203,7 +203,7 @@ module PortfolioPerformanceApi
     end
 
     def unique_titles(accounts)
-      titles = SheetsClient.unique_titles(accounts.map(&:name))
+      titles = SheetsClient.unique_titles(accounts)
       titles.zip(accounts).to_h
     end
 

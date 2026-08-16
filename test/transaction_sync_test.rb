@@ -168,6 +168,64 @@ class TransactionSyncTest < Minitest::Test
     assert_equal ["p2"], plan.update_sheet.map(&:uuid)
   end
 
+  def test_plan_rewrites_stale_sheet_destination_after_rename
+    date = Date.new(2017, 12, 1)
+    proto = record("Crypto", date, -9_900, "Koinly sale", "SALE", "u1", nil, "Crypto EUR")
+    sheet = record("Crypto", date, -9_900, "Koinly sale", "SALE", "u1", 3, "Crypto (EUR)")
+    cash = PortfolioPerformanceApi::TransactionSync::Vehicle.new(
+      kind: :deposit, name: "Crypto EUR", uuid: "cash", currency: "EUR"
+    )
+    names_index = { "Crypto EUR" => cash, "crypto eur" => cash }
+
+    plan = PortfolioPerformanceApi::TransactionSync.plan([proto], [sheet], names_index: names_index)
+
+    assert_empty plan.update_portfolio
+    assert_equal ["Crypto EUR"], plan.update_sheet.map(&:destination)
+    assert_equal [3], plan.update_sheet.map(&:row_number)
+  end
+
+  def test_plan_sheet_destination_wins_when_it_is_a_different_account
+    date = Date.new(2017, 12, 1)
+    proto = record("Crypto", date, -9_900, "Koinly sale", "SALE", "u1", nil, "Crypto EUR")
+    sheet = record("Crypto", date, -9_900, "Koinly sale", "SALE", "u1", 3, "EUR010069756")
+    cash = PortfolioPerformanceApi::TransactionSync::Vehicle.new(
+      kind: :deposit, name: "Crypto EUR", uuid: "cash", currency: "EUR"
+    )
+    bank = PortfolioPerformanceApi::TransactionSync::Vehicle.new(
+      kind: :deposit, name: "EUR010069756", uuid: "bank", currency: "EUR"
+    )
+    names_index = {
+      "Crypto EUR" => cash, "crypto eur" => cash,
+      "EUR010069756" => bank, "eur010069756" => bank
+    }
+
+    plan = PortfolioPerformanceApi::TransactionSync.plan([proto], [sheet], names_index: names_index)
+
+    assert_empty plan.update_sheet
+    assert_equal ["EUR010069756"], plan.update_portfolio.map(&:destination)
+  end
+
+  def test_plan_rewrites_sheet_destination_that_now_points_at_self
+    date = Date.new(2024, 4, 19)
+    proto = record("Moneyfarm GPM", date, -1_500_000, "Rendiconto", "PURCHASE", "u2", nil, "Moneyfarm GPM EUR")
+    sheet = record("Moneyfarm GPM", date, -1_500_000, "Rendiconto", "PURCHASE", "u2", 4, "Moneyfarm GPM")
+    cash = PortfolioPerformanceApi::TransactionSync::Vehicle.new(
+      kind: :deposit, name: "Moneyfarm GPM EUR", uuid: "gpm-cash", currency: "EUR"
+    )
+    titles = PortfolioPerformanceApi::TransactionSync::Vehicle.new(
+      kind: :securities, name: "Moneyfarm GPM", uuid: "gpm-sec", currency: "EUR"
+    )
+    names_index = {
+      "Moneyfarm GPM EUR" => cash, "moneyfarm gpm eur" => cash,
+      "Moneyfarm GPM" => titles, "moneyfarm gpm" => titles
+    }
+
+    plan = PortfolioPerformanceApi::TransactionSync.plan([proto], [sheet], names_index: names_index)
+
+    assert_empty plan.update_portfolio
+    assert_equal ["Moneyfarm GPM EUR"], plan.update_sheet.map(&:destination)
+  end
+
   def test_plan_pairs_duplicate_identities_one_to_one
     date = Date.new(2022, 1, 28)
     note = "Bonifico SEPA Italia | Ord: INPS"
@@ -267,6 +325,27 @@ class TransactionSyncTest < Minitest::Test
     assert_equal 100, PortfolioPerformanceApi::SheetsClient.sanitize_title("A" * 140).size
   end
 
+  def test_sheet_title_and_account_name_round_trip
+    deposit = PortfolioPerformanceApi::SheetsClient.sheet_title(:deposit, "EUR010069756")
+    securities = PortfolioPerformanceApi::SheetsClient.sheet_title(:securities, "Moneyfarm GPM")
+    same = PortfolioPerformanceApi::SheetsClient.unique_titles(
+      [
+        PortfolioPerformanceApi::TransactionSync::Vehicle.new(kind: :deposit, name: "Foo", uuid: "a", currency: "EUR"),
+        PortfolioPerformanceApi::TransactionSync::Vehicle.new(kind: :securities, name: "Foo", uuid: "b", currency: "EUR"),
+        PortfolioPerformanceApi::TransactionSync::Vehicle.new(kind: :deposit, name: "Foo", uuid: "c", currency: "EUR")
+      ]
+    )
+
+    assert_equal "deposit - EUR010069756", deposit
+    assert_equal "securities - Moneyfarm GPM", securities
+    assert_equal "EUR010069756", PortfolioPerformanceApi::SheetsClient.account_name(deposit)
+    assert_equal "Moneyfarm GPM", PortfolioPerformanceApi::SheetsClient.account_name(securities)
+    assert_equal :deposit, PortfolioPerformanceApi::SheetsClient.sheet_kind(deposit)
+    assert_equal :securities, PortfolioPerformanceApi::SheetsClient.sheet_kind(securities)
+    assert_equal "legacy", PortfolioPerformanceApi::SheetsClient.account_name("legacy")
+    assert_equal ["deposit - Foo", "securities - Foo", "deposit - Foo (2)"], same
+  end
+
   def test_spreadsheet_url_and_terminal_link
     url = PortfolioPerformanceApi::SheetsClient.spreadsheet_url("ssid")
     sheet = PortfolioPerformanceApi::SheetsClient.spreadsheet_url("ssid", gid: 42)
@@ -362,6 +441,24 @@ class TransactionSyncTest < Minitest::Test
     assert_equal 3, sheets.chunks[1][:start_row]
   end
 
+  def test_write_chunks_expands_grid_before_writing_past_row_limit
+    session = GridSession.new(
+      title: "deposit - EUR010069756",
+      sheet_id: 7,
+      row_count: 1001
+    )
+    sheets = PortfolioPerformanceApi::SheetsClient.new(session: session, spreadsheet_id: "ssid")
+    grid = Array.new(2001) { ["x"] }
+
+    sheets.write_chunks("deposit - EUR010069756", grid, start_row: 1, chunk_size: 1000)
+
+    expand = session.calls.find { |call| call[:body].to_s.include?("updateSheetProperties") }
+    refute_nil expand
+    body = JSON.parse(expand[:body])
+    assert_equal 2001, body.dig("requests", 0, "updateSheetProperties", "properties", "gridProperties", "rowCount")
+    assert session.calls.count { |call| call[:method] == :put } >= 2
+  end
+
   def test_reads_legacy_id_column_without_using_it
     mapping = PortfolioPerformanceApi::TransactionSync.column_mapping(
       %w[id date type amount currency description uuid]
@@ -390,6 +487,37 @@ class TransactionSyncTest < Minitest::Test
       @chunks.concat(
         PortfolioPerformanceApi::TransactionSync.sheet_chunks(grid, start_row: start_row, chunk_size: chunk_size)
       )
+    end
+  end
+
+  class GridSession
+    attr_reader :calls
+
+    def initialize(title:, sheet_id:, row_count:)
+      @title = title
+      @sheet_id = sheet_id
+      @row_count = row_count
+      @calls = []
+    end
+
+    def api_request(uri, method: :get, body: nil, content_type: nil)
+      @calls << { uri: uri.to_s, method: method, body: body, content_type: content_type }
+      payload = if method == :get
+        {
+          "sheets" => [
+            {
+              "properties" => {
+                "sheetId" => @sheet_id,
+                "title" => @title,
+                "gridProperties" => { "rowCount" => @row_count, "columnCount" => 26 }
+              }
+            }
+          ]
+        }
+      else
+        {}
+      end
+      Struct.new(:body).new(payload.to_json)
     end
   end
 

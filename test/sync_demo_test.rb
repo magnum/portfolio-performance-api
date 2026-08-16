@@ -150,9 +150,11 @@ class SyncDemoTest < Minitest::Test
     assert_equal 8, sheets.read_rows("Cryptocurrency").size
   end
 
-  def test_unique_sheet_titles_disambiguate_duplicates
-    titles = PortfolioPerformanceApi::SheetsClient.unique_titles(["Foo", "Foo", "Bar"])
-    assert_equal ["Foo", "Foo (2)", "Bar"], titles
+  def test_unique_sheet_titles_prefix_kind_and_disambiguate_same_kind
+    cash = vehicle_named("Deposit Account")
+    brokerage = vehicle_named("Brokerage Account")
+    titles = PortfolioPerformanceApi::SheetsClient.unique_titles([cash, brokerage, cash])
+    assert_equal ["deposit - Deposit Account", "securities - Brokerage Account", "deposit - Deposit Account (2)"], titles
   end
 
   def test_dump_round_trip_keeps_password

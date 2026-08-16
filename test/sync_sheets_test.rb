@@ -37,7 +37,7 @@ class SyncSheetsTest < Minitest::Test
     @client = @loaded.client
     @names = PortfolioPerformanceApi::TransactionSync.uuid_names(@client)
     @vehicles = PortfolioPerformanceApi::TransactionSync.vehicles(@client)
-    @titles = PortfolioPerformanceApi::SheetsClient.unique_titles(@vehicles.map(&:name))
+    @titles = PortfolioPerformanceApi::SheetsClient.unique_titles(@vehicles)
     session = PortfolioPerformanceApi::DriveClient.new(
       credentials_json: PortfolioPerformanceApi::Config.service_account_json,
       file_id: PortfolioPerformanceApi::Config.sync_test_drive_file_id,
@@ -76,14 +76,15 @@ class SyncSheetsTest < Minitest::Test
       assert_empty plan.create_portfolio, title
     end
 
-    cash_rows = @sheets.read_rows("Call Money Account")
+    cash_title = PortfolioPerformanceApi::SheetsClient.sheet_title(:deposit, "Call Money Account")
+    cash_rows = @sheets.read_rows(cash_title)
     assert_equal "2019-04-01", cash_rows[1][0].to_s
     assert_in_delta 500.0, cash_rows[1][2].to_f
     assert_equal "4a23e071-c072-482b-8dc4-68ca6d57ea89", cash_rows[1][6]
   end
 
   def test_sheet_row_missing_from_portfolio_is_planned_as_create
-    rows = @sheets.read_rows("Call Money Account") + [
+    rows = @sheets.read_rows(PortfolioPerformanceApi::SheetsClient.sheet_title(:deposit, "Call Money Account")) + [
       ["2026-08-15", "DEPOSIT", 10.0, "EUR", "Sheet only", "", ""]
     ]
     vehicle = @vehicles.find { |item| item.name == "Call Money Account" }
