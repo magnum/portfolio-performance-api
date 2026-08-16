@@ -159,6 +159,61 @@ class FinecoImportTest < Minitest::Test
     assert_equal ["VISA DEBIT", "Stipendio"], missing.map(&:description)
   end
 
+  def test_partition_existing_matches_pp_native_by_date_and_amount
+    client = protobuf_client
+    account = PortfolioPerformanceApi::FinecoImport.find_account(client, "Conto corrente")
+    client.transactions << PortfolioPerformanceApi::Proto::PTransaction.new(
+      uuid: "tx-pp-cash",
+      type: :CASH_TRANSFER,
+      account: "acc-cash",
+      otherAccount: "acc-savings",
+      currencyCode: "EUR",
+      amount: 550_000,
+      note: "Fineco export Movimenti",
+      date: Google::Protobuf::Timestamp.new(seconds: Time.utc(2026, 8, 14).to_i)
+    )
+    row = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 14),
+      description: "Cambio valuta Compravendita Divise",
+      amount_cents: 550_000,
+      type: :REMOVAL,
+      offset_account: "Risparmio"
+    )
+
+    existing, missing = PortfolioPerformanceApi::FinecoImport.partition_existing([row], client, account)
+    assert_equal [row], existing
+    assert_empty missing
+  end
+
+  def test_partition_existing_matches_sale_by_security_and_shares
+    client = protobuf_client
+    account = PortfolioPerformanceApi::FinecoImport.find_account(client, "Conto corrente")
+    client.transactions << PortfolioPerformanceApi::Proto::PTransaction.new(
+      uuid: "tx-pp-sale",
+      type: :SALE,
+      account: "acc-cash",
+      portfolio: "port-titoli",
+      security: "sec-etf",
+      currencyCode: "EUR",
+      amount: 9_896,
+      shares: 1_000_000_000,
+      note: "Fineco export Movimenti Dc",
+      date: Google::Protobuf::Timestamp.new(seconds: Time.utc(2026, 8, 14).to_i)
+    )
+    row = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 15),
+      description: "Compravendita Titoli VWCE Qta/Val.nom. 10,000000",
+      amount_cents: 9_900,
+      type: :DEPOSIT,
+      security: "VWCE",
+      offset_account: "Deposito titoli"
+    )
+
+    existing, missing = PortfolioPerformanceApi::FinecoImport.partition_existing([row], client, account)
+    assert_equal [row], existing
+    assert_empty missing
+  end
+
   def test_fineco_row_and_proto_share_identity
     account = PortfolioPerformanceApi::Proto::PAccount.new(
       uuid: "acc-cash",
@@ -174,6 +229,7 @@ class FinecoImportTest < Minitest::Test
     tx = PortfolioPerformanceApi::FinecoImport.build_transaction(row, account)
     proto = PortfolioPerformanceApi::TransactionSync.from_proto(tx, account)
 
+    assert_match(/\Appapi import \d{8}T\d{6}\z/, tx.source)
     assert_equal proto.id, PortfolioPerformanceApi::FinecoImport.identity_for(row, account)
     assert_equal proto.id, PortfolioPerformanceApi::TransactionIdentity.id(
       "EUR010069756", Date.new(2026, 8, 15), -9_900, "VISA DEBIT CRYPTO TAX"
@@ -320,7 +376,7 @@ class FinecoImportTest < Minitest::Test
       amount_cents: 9_900,
       type: :REMOVAL,
       security: "VWCE",
-      offset_account: "Risparmio"
+      offset_account: "Deposito titoli"
     )
     tx = PortfolioPerformanceApi::FinecoImport.build_transaction(row, account, client: client)
     proto = PortfolioPerformanceApi::TransactionSync.from_proto(
@@ -329,13 +385,17 @@ class FinecoImportTest < Minitest::Test
       security_names: PortfolioPerformanceApi::TransactionSync.security_names(client)
     )
 
-    assert_equal "acc-savings", tx.otherAccount
+    refute tx.has_otherAccount?
+    assert_equal "port-titoli", tx.portfolio
     assert_equal "sec-etf", tx.security
+    assert_equal :PURCHASE, tx.type
+    refute tx.otherUuid.to_s.empty?
+    assert tx.has_otherUpdatedAt?
     assert_equal proto.id, PortfolioPerformanceApi::FinecoImport.identity_for(row, account)
     assert_equal proto.id, PortfolioPerformanceApi::TransactionIdentity.id(
       "Conto corrente", Date.new(2026, 8, 15), -9_900,
       "Compravendita Titoli VWCE Qta/Val.nom. 10,000000",
-      "Risparmio",
+      "Deposito titoli",
       "VWCE"
     )
 
@@ -370,9 +430,287 @@ class FinecoImportTest < Minitest::Test
     )
 
     refute tx.has_otherAccount?
+    assert_equal :PURCHASE, tx.type
     assert_equal "port-titoli", tx.portfolio
     assert_equal "Deposito titoli", proto.destination
     assert_equal proto.id, PortfolioPerformanceApi::FinecoImport.identity_for(row, account)
+  end
+
+  def test_portfolio_type_from_security_offset_and_sign
+    removal = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 15), description: "x", amount_cents: 1_000, type: :REMOVAL
+    )
+    deposit = removal.dup
+    deposit.type = :DEPOSIT
+
+    assert_equal :REMOVAL, PortfolioPerformanceApi::FinecoImport.portfolio_type(removal)
+    assert_equal :DEPOSIT, PortfolioPerformanceApi::FinecoImport.portfolio_type(deposit)
+
+    removal.offset_account = "Risparmio"
+    deposit.offset_account = "Risparmio"
+    assert_equal :CASH_TRANSFER, PortfolioPerformanceApi::FinecoImport.portfolio_type(removal)
+    assert_equal :CASH_TRANSFER, PortfolioPerformanceApi::FinecoImport.portfolio_type(deposit)
+
+    removal.security = "VWCE"
+    deposit.security = "VWCE"
+    assert_equal :PURCHASE, PortfolioPerformanceApi::FinecoImport.portfolio_type(removal)
+    assert_equal :SALE, PortfolioPerformanceApi::FinecoImport.portfolio_type(deposit)
+
+    removal.offset_account = nil
+    deposit.offset_account = nil
+    assert_equal :DEPOSIT, PortfolioPerformanceApi::FinecoImport.portfolio_type(removal)
+    assert_equal :DEPOSIT, PortfolioPerformanceApi::FinecoImport.portfolio_type(deposit)
+  end
+
+  def test_cash_transfer_outbound_and_inbound_accounts
+    client = protobuf_client
+    account = PortfolioPerformanceApi::FinecoImport.find_account(client, "Conto corrente")
+    outbound = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 15),
+      description: "Cambio valuta Compravendita Divise",
+      amount_cents: 198_000_000,
+      type: :REMOVAL,
+      offset_account: "Risparmio"
+    )
+    inbound = outbound.dup
+    inbound.type = :DEPOSIT
+    inbound.amount_cents = 4_648
+
+    out_tx = PortfolioPerformanceApi::FinecoImport.build_transaction(outbound, account, client: client)
+    in_tx = PortfolioPerformanceApi::FinecoImport.build_transaction(inbound, account, client: client)
+
+    assert_equal :CASH_TRANSFER, out_tx.type
+    assert_equal "acc-cash", out_tx.account
+    assert_equal "acc-savings", out_tx.otherAccount
+
+    assert_equal :CASH_TRANSFER, in_tx.type
+    assert_equal "acc-savings", in_tx.account
+    assert_equal "acc-cash", in_tx.otherAccount
+
+    names = PortfolioPerformanceApi::TransactionSync.uuid_names(client)
+    out_proto = PortfolioPerformanceApi::TransactionSync.from_proto(out_tx, account, names: names)
+    in_proto = PortfolioPerformanceApi::TransactionSync.from_proto(in_tx, account, names: names)
+    assert_equal out_proto.id, PortfolioPerformanceApi::FinecoImport.identity_for(outbound, account)
+    assert_equal in_proto.id, PortfolioPerformanceApi::FinecoImport.identity_for(inbound, account)
+  end
+
+  def test_sale_with_security_and_offset
+    client = protobuf_client
+    account = PortfolioPerformanceApi::FinecoImport.find_account(client, "Conto corrente")
+    row = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 15),
+      description: "Compravendita Titoli VWCE Qta/Val.nom. 10,000000",
+      amount_cents: 9_900,
+      type: :DEPOSIT,
+      security: "VWCE",
+      offset_account: "Deposito titoli"
+    )
+    tx = PortfolioPerformanceApi::FinecoImport.build_transaction(row, account, client: client)
+
+    assert_equal :SALE, tx.type
+    assert_equal "acc-cash", tx.account
+    assert_equal "port-titoli", tx.portfolio
+    assert_equal "sec-etf", tx.security
+    assert_equal 1_000_000_000, tx.shares
+  end
+
+  def test_cross_currency_offset_is_cash_transfer_with_fx_unit
+    client = protobuf_client
+    client.accounts << PortfolioPerformanceApi::Proto::PAccount.new(
+      uuid: "acc-usd", name: "USD010069756", currencyCode: "USD"
+    )
+    client.transactions << PortfolioPerformanceApi::Proto::PTransaction.new(
+      uuid: "tx-fx",
+      type: :CASH_TRANSFER,
+      account: "acc-cash",
+      otherAccount: "acc-usd",
+      currencyCode: "EUR",
+      amount: 4_000,
+      date: Google::Protobuf::Timestamp.new(seconds: Time.utc(2025, 10, 29).to_i),
+      units: [
+        PortfolioPerformanceApi::Proto::PTransactionUnit.new(
+          type: :GROSS_VALUE,
+          amount: 4_000,
+          currencyCode: "EUR",
+          fxAmount: 4_648,
+          fxCurrencyCode: "USD"
+        )
+      ]
+    )
+    account = PortfolioPerformanceApi::FinecoImport.find_account(client, "USD010069756")
+    outbound = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 14),
+      description: "Cambio valuta Compravendita Divise",
+      amount_cents: 550_000,
+      type: :REMOVAL,
+      offset_account: "Conto corrente"
+    )
+    inbound = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2025, 10, 29),
+      description: "Cambio valuta Compravendita Divise",
+      amount_cents: 4_648,
+      type: :DEPOSIT,
+      offset_account: "Conto corrente"
+    )
+
+    PortfolioPerformanceApi::FinecoImport.assign_types!([outbound, inbound], account, client)
+    out_tx = PortfolioPerformanceApi::FinecoImport.build_transaction(outbound, account, client: client)
+    in_tx = PortfolioPerformanceApi::FinecoImport.build_transaction(inbound, account, client: client)
+
+    assert_equal :CASH_TRANSFER, outbound.proto_type
+    assert_equal :CASH_TRANSFER, inbound.proto_type
+    assert_equal "TRANSFER_OUT", PortfolioPerformanceApi::FinecoImport.preview_type(outbound)
+    assert_equal "TRANSFER_IN", PortfolioPerformanceApi::FinecoImport.preview_type(inbound)
+
+    assert_equal :CASH_TRANSFER, out_tx.type
+    assert_equal "acc-usd", out_tx.account
+    assert_equal "acc-cash", out_tx.otherAccount
+    assert_equal "USD", out_tx.currencyCode
+    assert_equal 550_000, out_tx.amount
+    unit = out_tx.units.first
+    assert_equal :GROSS_VALUE, unit.type
+    assert_equal 550_000, unit.amount
+    assert_equal "USD", unit.currencyCode
+    assert_equal "EUR", unit.fxCurrencyCode
+    assert_equal (550_000 * 4_000 / 4_648.0).round, unit.fxAmount
+
+    assert_equal :CASH_TRANSFER, in_tx.type
+    assert_equal "acc-cash", in_tx.account
+    assert_equal "acc-usd", in_tx.otherAccount
+    assert_equal "EUR", in_tx.currencyCode
+    assert_equal 4_000, in_tx.amount
+    in_unit = in_tx.units.first
+    assert_equal 4_000, in_unit.amount
+    assert_equal "EUR", in_unit.currencyCode
+    assert_equal 4_648, in_unit.fxAmount
+    assert_equal "USD", in_unit.fxCurrencyCode
+    assert in_unit.has_fxRateToBase?
+    assert_equal 10, in_unit.fxRateToBase.scale
+    assert_equal ["0200f2e14b"].pack("H*"), in_unit.fxRateToBase.value
+    assert out_tx.units.first.has_fxRateToBase?
+    refute out_tx.otherUuid.to_s.empty?
+    assert out_tx.has_otherUpdatedAt?
+    refute in_tx.otherUuid.to_s.empty?
+    assert in_tx.has_otherUpdatedAt?
+  end
+
+  def test_repair_cross_entries_stamps_missing_other_uuid
+    client = protobuf_client
+    deposit = client.transactions.find { |tx| tx.uuid == "tx-1" }
+    transfer = client.transactions.find { |tx| tx.uuid == "tx-3" }
+    purchase = client.transactions.find { |tx| tx.uuid == "tx-buy" }
+
+    refute transfer.has_otherUuid?
+    refute purchase.has_otherUuid?
+
+    stamped = PortfolioPerformanceApi::FinecoImport.repair_cross_entries!(client)
+
+    assert_equal 2, stamped
+    refute transfer.otherUuid.to_s.empty?
+    assert transfer.has_otherUpdatedAt?
+    refute purchase.otherUuid.to_s.empty?
+    refute deposit.has_otherUuid?
+    assert_equal 0, PortfolioPerformanceApi::FinecoImport.repair_cross_entries!(client)
+  end
+
+  def test_partition_existing_matches_fx_inbound_by_account_currency_amount
+    client = protobuf_client
+    client.accounts << PortfolioPerformanceApi::Proto::PAccount.new(
+      uuid: "acc-usd", name: "USD010069756", currencyCode: "USD"
+    )
+    client.transactions << PortfolioPerformanceApi::Proto::PTransaction.new(
+      uuid: "tx-fx-in",
+      type: :CASH_TRANSFER,
+      account: "acc-cash",
+      otherAccount: "acc-usd",
+      currencyCode: "EUR",
+      amount: 4_000,
+      note: "Fineco export",
+      date: Google::Protobuf::Timestamp.new(seconds: Time.utc(2025, 10, 29).to_i),
+      units: [
+        PortfolioPerformanceApi::Proto::PTransactionUnit.new(
+          type: :GROSS_VALUE,
+          amount: 4_000,
+          currencyCode: "EUR",
+          fxAmount: 4_648,
+          fxCurrencyCode: "USD"
+        )
+      ]
+    )
+    account = PortfolioPerformanceApi::FinecoImport.find_account(client, "USD010069756")
+    row = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2025, 10, 29),
+      description: "Cambio valuta Compravendita Divise",
+      amount_cents: 4_648,
+      type: :DEPOSIT,
+      offset_account: "EUR010069756"
+    )
+
+    existing, missing = PortfolioPerformanceApi::FinecoImport.partition_existing([row], client, account)
+    assert_equal [row], existing
+    assert_empty missing
+  end
+
+  def test_encode_decimal_matches_portfolio_performance_wire_format
+    rate = PortfolioPerformanceApi::FinecoImport.encode_decimal(4_000.to_f / 4_648)
+    assert_equal 10, rate.scale
+    assert_equal 10, rate.precision
+    assert_equal ["0200f2e14b"].pack("H*"), rate.value
+
+    over_one = PortfolioPerformanceApi::FinecoImport.encode_decimal(550_000.to_f / 475_696)
+    assert_equal 10, over_one.scale
+    assert_equal 11, over_one.precision
+    assert_equal ["02b12635e3"].pack("H*"), over_one.value
+  end
+
+  def test_extract_shares_from_fineco_qta
+    row = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2025, 10, 28),
+      description: "Compravendita Titoli AMAZON.COM Qta/Val.nom. 20,000000",
+      amount_cents: 454_364,
+      type: :DEPOSIT
+    )
+    assert_equal 2_000_000_000, PortfolioPerformanceApi::FinecoImport.extract_shares(row)
+  end
+
+  def test_deposit_with_matched_security_does_not_write_security
+    client = protobuf_client
+    account = PortfolioPerformanceApi::FinecoImport.find_account(client, "Conto corrente")
+    row = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2025, 10, 28),
+      description: "Compravendita Titoli AMAZON.COM Qta/Val.nom. 20,000000",
+      amount_cents: 454_364,
+      type: :DEPOSIT,
+      security: "AMAZON.COM"
+    )
+    tx = PortfolioPerformanceApi::FinecoImport.build_transaction(row, account, client: client)
+
+    assert_equal :DEPOSIT, tx.type
+    refute tx.has_security?
+    refute tx.has_portfolio?
+    assert_equal PortfolioPerformanceApi::TransactionIdentity.id(
+      "Conto corrente", Date.new(2025, 10, 28), 454_364,
+      "Compravendita Titoli AMAZON.COM Qta/Val.nom. 20,000000",
+      "",
+      ""
+    ), PortfolioPerformanceApi::FinecoImport.identity_for(row, account)
+  end
+
+  def test_buy_sell_rejects_cash_offset
+    client = protobuf_client
+    account = PortfolioPerformanceApi::FinecoImport.find_account(client, "Conto corrente")
+    row = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 15),
+      description: "Compravendita Titoli VWCE Qta/Val.nom. 10,000000",
+      amount_cents: 9_900,
+      type: :REMOVAL,
+      security: "VWCE",
+      offset_account: "Risparmio"
+    )
+    error = assert_raises(ArgumentError) do
+      PortfolioPerformanceApi::FinecoImport.build_transaction(row, account, client: client)
+    end
+    assert_includes error.message, "securities account"
   end
 
   def test_exclude_matching_drops_rows_when_any_column_matches
@@ -558,7 +896,32 @@ class FinecoImportTest < Minitest::Test
       assert_equal 9_900, imported.amount
       assert_equal "Fineco import", imported.note
       assert_equal "acc-cash", imported.account
+      assert_match(/\Appapi import \d{8}T\d{6}\z/, imported.source)
     end
+  end
+
+  def test_append_sets_same_import_source_on_batch
+    client = protobuf_client
+    account = PortfolioPerformanceApi::FinecoImport.find_account(client, "Conto corrente")
+    visa = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 15),
+      description: "VISA DEBIT",
+      amount_cents: 9_900,
+      type: :REMOVAL
+    )
+    stipendio = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2026, 8, 16),
+      description: "Stipendio",
+      amount_cents: 100_000,
+      type: :DEPOSIT
+    )
+    at = Time.utc(2026, 8, 17, 0, 24, 11)
+    before = client.transactions.size
+    PortfolioPerformanceApi::FinecoImport.append!(client, account, [visa, stipendio], at: at)
+
+    imported = client.transactions.drop(before)
+    assert_equal 2, imported.size
+    imported.each { |tx| assert_equal "ppapi import 20260817T002411", tx.source }
   end
 
   def test_encrypted_save_writes_data_entry_pp_reads

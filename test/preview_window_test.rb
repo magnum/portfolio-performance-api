@@ -170,7 +170,7 @@ class PreviewWindowTest < Minitest::Test
     assert_includes lines, "  +  row p"
     assert_includes lines, "  ~  row s"
     assert_includes lines, "[Crypto (EUR)] write (S)spreadsheet, (P)ortfolio or (B)oth?"
-    assert lines.last.include?("esc skip")
+    assert lines.last.include?("esc/q skip")
   end
 
   def test_render_single_import_section
@@ -178,7 +178,7 @@ class PreviewWindowTest < Minitest::Test
       "EUR010069756",
       [{ title: "IMPORT", lines: ["+  row"], counts: { create: 1, update: 0 } }],
       page_size: 5,
-      prompt: "[EUR010069756] import (Y)es or Esc to skip?",
+      prompt: "[EUR010069756] import (Y)es or Esc/Q to skip?",
       choices: %w[Y]
     )
     lines = preview.send(:render_lines)
@@ -186,7 +186,7 @@ class PreviewWindowTest < Minitest::Test
     assert_equal "EUR010069756", lines.first
     assert_includes lines, "IMPORT  +1/~0  1-1/1"
     assert_includes lines, "  +  row"
-    assert_includes lines, "[EUR010069756] import (Y)es or Esc to skip?"
+    assert_includes lines, "[EUR010069756] import (Y)es or Esc/Q to skip?"
   end
 
   def test_render_excluded_above_import
@@ -197,7 +197,7 @@ class PreviewWindowTest < Minitest::Test
         { title: "IMPORT", lines: ["+  row"], counts: { create: 1, update: 0 } }
       ],
       page_size: 5,
-      prompt: "[EUR010069756] import (Y)es or Esc to skip?",
+      prompt: "[EUR010069756] import (Y)es or Esc/Q to skip?",
       choices: %w[Y]
     )
     lines = preview.send(:render_lines)
@@ -213,6 +213,23 @@ class PreviewWindowTest < Minitest::Test
     assert_includes lines, "  ex2"
     assert_includes lines, "  ex3"
     assert_includes lines, "IMPORT  +1/~0  1-1/1"
+  end
+
+  def test_q_and_escape_skip_import
+    preview = PortfolioPerformanceApi::RowPreview.new(
+      "EUR010069756",
+      [{ title: "IMPORT", lines: ["+  row"], counts: { create: 1, update: 0 } }],
+      page_size: 5,
+      prompt: "[EUR010069756] import (Y)es or Esc/Q to skip?",
+      choices: %w[Y]
+    )
+    event = Struct.new(:key, :value, keyword_init: true)
+    key = Struct.new(:name)
+
+    assert_equal "N", preview.send(:key_choice, event.new(key: key.new(:escape), value: "\e"))
+    assert_equal "N", preview.send(:key_choice, event.new(key: nil, value: "q"))
+    assert_equal "N", preview.send(:key_choice, event.new(key: nil, value: "Q"))
+    assert_equal "Y", preview.send(:key_choice, event.new(key: nil, value: "y"))
   end
 
   private

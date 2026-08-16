@@ -25,6 +25,7 @@ module PortfolioPerformanceApi
         rows = FinecoXls.parse(options[:xls], skip_lines: options[:skip_lines])
         excluded, kept = FinecoXls.partition_excluded(rows, options[:exclude])
         FinecoImport.apply_matches!(kept, options[:match_security], options[:match_offset_account])
+        FinecoImport.assign_types!(kept, account, loaded.client)
         FinecoImport.validate_matches!(loaded.client, kept)
         existing, candidates = FinecoImport.partition_existing(kept, loaded.client, account)
         last_date = FinecoImport.last_transaction_date(loaded.client, account.uuid)
@@ -47,16 +48,19 @@ module PortfolioPerformanceApi
           puts "#{account.name}: skipped"
           return
         end
-        if candidates.empty?
+
+        repaired = FinecoImport.repair_cross_entries!(loaded.client)
+        imported = candidates.empty? ? 0 : FinecoImport.append!(loaded.client, account, candidates)
+        if imported.zero? && repaired.zero?
           warn "nothing to import"
           return
         end
 
-        FinecoImport.append!(loaded.client, account, candidates)
         PortfolioStore.save(loaded)
         session.upload(PortfolioStore.dump(loaded))
         uploaded = true
-        puts "Imported #{candidates.size} transactions into #{loaded.path}"
+        puts "Imported #{imported} transactions into #{loaded.path}" if imported.positive?
+        puts "Repaired #{repaired} cross-entry UUIDs" if repaired.positive?
         puts "Uploaded portfolio #{File.basename(loaded.path)}"
       rescue Error, ArgumentError, RegexpError => error
         abort error.message
@@ -121,7 +125,7 @@ module PortfolioPerformanceApi
       def self.format_row(row, width: TTY::Screen.width)
         amount = format("%.2f", (row.amount_cents / 100.0).round(2))
         sign = row.type.to_s == "REMOVAL" ? "-" : "+"
-        prefix = "#{sign}  #{row.date}  #{row.type.to_s.ljust(16)}  #{amount.rjust(8)}  "
+        prefix = "#{sign}  #{row.date}  #{FinecoImport.preview_type(row).ljust(16)}  #{amount.rjust(8)}  "
         security = row.security.to_s.empty? ? "" : "S #{row.security}  "
         dest = row.offset_account.to_s.empty? ? "" : " → #{row.offset_account}"
         available = [Integer(width) - 2 - prefix.size, 0].max
@@ -179,7 +183,7 @@ module PortfolioPerformanceApi
           account_name,
           self.class.preview_sections(rows, excluded_rows, existing_rows, exclude: exclude),
           page_size: Config.sync_preview_rows,
-          prompt: "[#{account_name}] import (Y)es or Esc to skip?",
+          prompt: "[#{account_name}] import (Y)es or Esc/Q to skip?",
           choices: %w[Y]
         ).run
       end

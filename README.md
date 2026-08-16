@@ -63,7 +63,7 @@ docker run --env-file .env -p 9292:80 portfolio-performance-api
 
 `bin/import fineco` reads a Fineco export (`.xls` / `.xlsx`) and appends new transactions to the Drive `.portfolio` (`PORTFOLIO_GOOGLE_DRIVE_FILE_ID`). It downloads that file into `./import`, copies a backup `name-import-backup-YYYYMMDDTHHMMSS.portfolio`, imports into the downloaded file (not the backup), then uploads only the imported file.
 
-It only proposes Excel rows whose identity hash is not already in the account (same SHA-256 as sync: account + date + amount + description + destination + security, matched 1:1). `--exclude REGEXP` drops Excel rows **before** that filter if the regexp matches **any column** (case-insensitive). `--skip-lines N` overrides `IMPORT_FINECO_XLS_SKIP_LINES` (default `13`, Fineco EUR preamble). USD exports need `--skip-lines=7`. `Data_Valuta`, `Entrate` → `DEPOSIT`, `Uscite` → `REMOVAL`. The note is `Descrizione Descrizione_Completa Categoria: Moneymap`.
+It only proposes Excel rows that are not already in the account. Exact identity is the same SHA-256 as sync (account + date + amount + description + destination + security, matched 1:1). It also skips a row if the account already has the same date and amount (PP's own Fineco PDF/CSV import uses different notes and types), or a buy/sell with the same security and share count within 7 days (trade date vs `Data_Valuta`). `--exclude REGEXP` drops Excel rows **before** that filter if the regexp matches **any column** (case-insensitive). `--skip-lines N` overrides `IMPORT_FINECO_XLS_SKIP_LINES` (default `13`, Fineco EUR preamble). USD exports need `--skip-lines=7`. `Data_Valuta`, `Entrate` → `DEPOSIT`, `Uscite` → `REMOVAL`. The note is `Descrizione Descrizione_Completa Categoria: Moneymap`.
 
 Fineco does not have security / offset-account columns, so those fields are set with regexps that scan **any column** of the current row (case-insensitive), after `--exclude` and before hashing. Both flags share the same `/REGEXP/` or `/REGEXP/VALUE` form and can be repeated (first match wins **per field**; security and offset are independent, so one Excel row can set both):
 
@@ -74,6 +74,19 @@ Fineco does not have security / offset-account columns, so those fields are set 
 
 The security name and offset account must already exist in the `.portfolio` (by name or UUID). Offset may be a **cash account** (`otherAccount`) or a **securities account** (`portfolio`). Import aborts if they do not.
 
+Portfolio Performance type is chosen after the matchers run:
+
+| Security | Offset | Fineco amount | Type |
+| --- | --- | --- | --- |
+| no | yes | negative | `CASH_TRANSFER` (Transfer Outbound) |
+| no | yes | positive | `CASH_TRANSFER` (Transfer Inbound) |
+| yes | no | any | `DEPOSIT` without a security (PP cannot attach a security to a cash deposit; that shows as `<no XEntry>`) |
+| yes | yes (securities account) | positive | `SALE` (buy/sell cross-entry) |
+| yes | yes (securities account) | negative | `PURCHASE` (buy/sell cross-entry) |
+| no | no | Entrate / Uscite | `DEPOSIT` / `REMOVAL` |
+
+Cross-currency transfers (USD↔EUR) keep `CASH_TRANSFER` and add a `GROSS_VALUE` FX unit with `fxRateToBase` (PP cannot open a transfer without the rate). Buy/sell and cash transfers also set `otherUuid` / `otherUpdatedAt` for the counterpart entry; without those PP throws `UnsupportedOperationException` on open. The other-currency amount is taken from the closest existing FX transfer between those two accounts.
+
 Needs an interactive terminal and `bundle install` without `BUNDLE_WITHOUT=utils`. Share the `.portfolio` as **Editor**. Close Portfolio Performance before importing.
 
 ```bash
@@ -81,10 +94,25 @@ bin/import fineco EUR010069756 ./movements.xlsx
 bin/import fineco EUR010069756 test ./movements.xlsx
 bin/import fineco "EUR010069756 test" ./movements.xlsx --exclude "compravendita valute"
 bin/import fineco USD010069756 import/test_usd.xlsx --skip-lines=7
-bin/import fineco EUR010069756 import/test_eur.xlsx \
-  --match-security "/Compravendita Titoli (.+?) Qta/" \
-  --match-offset-account "/Compravendita Titoli/fineco00109494" \
-  --match-offset-account "/Compravendita Divise/USD010069756"
+
+# Conto USD: titoli → deposito titoli, cambi valuta → conto EUR.
+# I due --match-offset-account convivono: per ogni riga vince il primo che matcha.
+#
+# fineco          provider (oggi l'unico)
+# USD010069756    conto PP su cui importare (nome o UUID; qui il conto USD)
+# import/test_usd.xlsx
+#                 export Fineco .xls/.xlsx (ultimo argomento)
+# --skip-lines=7  salta le 7 righe di intestazione Fineco USD
+#                 (EUR di solito 13, o IMPORT_FINECO_XLS_SKIP_LINES)
+# --match-security "/Compravendita Titoli (.+?) Qta/"
+#                 se la riga contiene "Compravendita Titoli AMAZON.COM Qta/...",
+#                 il gruppo (.+?) diventa il nome titolo in PP (AMAZON.COM)
+# --match-offset-account "/Compravendita Titoli/fineco00109494"
+#                 stesse righe titoli: controparte = deposito titoli PP
+#                 (niente gruppo → VALUE fisso dopo l'ultimo /)
+# --match-offset-account "/Compravendita Divise/EUR010069756"
+#                 righe "Compravendita Divise": controparte = conto EUR
+#                 → CASH_TRANSFER USD↔EUR
 bin/import fineco USD010069756 import/test_usd.xlsx --skip-lines=7 \
   --match-security "/Compravendita Titoli (.+?) Qta/" \
   --match-offset-account "/Compravendita Titoli/fineco00109494" \
@@ -93,7 +121,7 @@ bin/import fineco USD010069756 import/test_usd.xlsx --skip-lines=7 \
 
 Account names may contain spaces: quotes are optional. The last argument is the Excel file; everything before it is the account name.
 
-Preview shows **EXCLUDED** first (every matching `--exclude` row), then **EXISTING** (already in the portfolio by hash), then **IMPORT**. Arrows scroll only IMPORT. Keys: ↑/↓ one row, `u`/`v` page, **Y** import, **Esc** skip. Password: `PORTFOLIO_PASSWORD`. Sample export: `import/test.xlsx`.
+Preview shows **EXCLUDED** first (every matching `--exclude` row), then **EXISTING** (already in the portfolio by hash), then **IMPORT**. Arrows scroll only IMPORT. Keys: ↑/↓ one row, `u`/`v` page, **Y** import, **Esc** or **Q** skip. Password: `PORTFOLIO_PASSWORD`. Sample export: `import/test.xlsx`.
 
 ## Spreadsheet sync
 
@@ -108,7 +136,7 @@ bin/sync
 bin/sync cleanup
 ```
 
-Keys: ↑/↓ one row, `u`/`v` page, **S** spreadsheet only, **P** portfolio only, **B** both, **Esc** skip the account. The `.portfolio` is uploaded to Drive once at the end if at least one account chose P or B.
+Keys: ↑/↓ one row, `u`/`v` page, **S** spreadsheet only, **P** portfolio only, **B** both, **Esc** or **Q** skip the account. The `.portfolio` is uploaded to Drive once at the end if at least one account chose P or B.
 
 `bin/sync cleanup` clears one sheet at a time (rows above the header and the header stay). Confirm with `y` / `n` / `a` (all remaining sheets), **Esc** = no.
 

@@ -4,7 +4,7 @@ require "date"
 
 module PortfolioPerformanceApi
   class FinecoXls
-    Row = Struct.new(:date, :description, :amount_cents, :type, :raw, :security, :offset_account, keyword_init: true)
+    Row = Struct.new(:date, :description, :amount_cents, :type, :raw, :security, :offset_account, :proto_type, keyword_init: true)
 
     DEFAULT_SKIP_LINES = 13
     DATE_VALUTA_HEADERS = /data[_\s-]*valuta/i

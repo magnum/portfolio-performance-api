@@ -44,6 +44,12 @@ message PPortfolio {
   optional string referenceAccount = 5;
 }
 
+message PDecimal {
+  int32 scale = 1;
+  int32 precision = 2;
+  bytes value = 3;
+}
+
 message PTransactionUnit {
   enum Type {
     GROSS_VALUE = 0;
@@ -55,6 +61,7 @@ message PTransactionUnit {
   string currencyCode = 3;
   optional int64 fxAmount = 4;
   optional string fxCurrencyCode = 5;
+  optional PDecimal fxRateToBase = 6;
 }
 
 message PTransaction {
@@ -82,6 +89,8 @@ message PTransaction {
   optional string portfolio = 4;
   optional string otherAccount = 5;
   optional string otherPortfolio = 6;
+  optional string otherUuid = 7;
+  google.protobuf.Timestamp otherUpdatedAt = 8;
   google.protobuf.Timestamp date = 9;
   string currencyCode = 10;
   int64 amount = 11;
@@ -90,6 +99,7 @@ message PTransaction {
   optional string security = 14;
   repeated PTransactionUnit units = 15;
   google.protobuf.Timestamp updatedAt = 16;
+  optional string source = 17;
 }
 
 message PClient {

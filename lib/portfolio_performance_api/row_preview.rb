@@ -98,19 +98,25 @@ module PortfolioPerformanceApi
         $stderr.print "#{@prompt} "
         answer = $stdin.gets.to_s.strip.upcase
         return answer if @choices.include?(answer)
-        return "N" if answer.empty? || answer == "\e"
+        return "N" if answer.empty? || answer == "\e" || answer == "Q"
 
-        warn "type #{@choices.join(", ")} or press Esc to skip"
+        warn "type #{@choices.join(", ")} or press Esc/Q to skip"
       end
     end
 
     def key_choice(event)
-      return "N" if event.key&.name == :escape || event.value == "\e"
+      return "N" if skip_key?(event)
 
       value = event.value.to_s.upcase
       return value if @choices.include?(value)
 
       nil
+    end
+
+    def skip_key?(event)
+      return true if event.key&.name == :escape || event.value == "\e"
+
+      event.value.to_s.upcase == "Q" && !@choices.include?("Q")
     end
 
     def draw
@@ -140,7 +146,7 @@ module PortfolioPerformanceApi
         @heading,
         section_lines,
         @prompt,
-        "↑/↓ row  u/v page ±#{@window.page_size}  esc skip"
+        "↑/↓ row  u/v page ±#{@window.page_size}  esc/q skip"
       ].flatten
     end
 

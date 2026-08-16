@@ -187,6 +187,23 @@ class ImportTest < Minitest::Test
     assert_operator security_at, :<, note_at
     assert_operator note_at, :<, dest_at
     refute_includes line, "[AMAZON.COM]"
+    assert_includes line, "PURCHASE"
+  end
+
+  def test_fineco_format_row_shows_transfer_direction
+    inbound = PortfolioPerformanceApi::FinecoXls::Row.new(
+      date: Date.new(2025, 10, 29),
+      description: "Cambio valuta Compravendita Divise",
+      amount_cents: 4_648,
+      type: :DEPOSIT,
+      offset_account: "EUR010069756"
+    )
+    outbound = inbound.dup
+    outbound.type = :REMOVAL
+    outbound.amount_cents = 550_000
+
+    assert_includes PortfolioPerformanceApi::Import::Fineco.format_row(inbound, width: 160), "TRANSFER_IN"
+    assert_includes PortfolioPerformanceApi::Import::Fineco.format_row(outbound, width: 160), "TRANSFER_OUT"
   end
 
   def test_preview_sections_puts_excluded_above_import
