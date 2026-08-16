@@ -6,7 +6,10 @@ require "uri"
 module PortfolioPerformanceApi
   class SheetsClient
     SPREADSHEET_URI = "https://sheets.googleapis.com/v4/spreadsheets/%s"
+    EDIT_URI = "https://docs.google.com/spreadsheets/d/%s/edit"
     DATA_RANGE = "A:G"
+
+    attr_reader :spreadsheet_id
 
     def initialize(session:, spreadsheet_id:)
       raise NotConfigured, "SYNC_GOOGLE_DRIVE_FILE_ID is not configured" if spreadsheet_id.to_s.empty?
@@ -16,10 +19,11 @@ module PortfolioPerformanceApi
     end
 
     def sheet_titles
-      uri = URI(format(SPREADSHEET_URI, @spreadsheet_id))
-      uri.query = URI.encode_www_form("fields" => "sheets.properties.title")
-      payload = JSON.parse(@session.api_request(uri).body)
-      Array(payload["sheets"]).map { |sheet| sheet.dig("properties", "title") }
+      sheet_properties.map { |props| props["title"] }
+    end
+
+    def sheet_gids
+      sheet_properties.to_h { |props| [props["title"], props["sheetId"]] }
     end
 
     def ensure_sheet(title, known_titles: nil)
@@ -80,6 +84,28 @@ module PortfolioPerformanceApi
       with_retry do
         @session.api_request(uri, method: :post, body: "{}")
       end
+    end
+
+    def clear_data_rows(title, skip_rows: 0)
+      start_row = Integer(skip_rows) + 2
+      uri = URI("#{format(SPREADSHEET_URI, @spreadsheet_id)}/values/#{encode_range(title, "A#{start_row}:Z")}:clear")
+      with_retry do
+        @session.api_request(uri, method: :post, body: "{}")
+      end
+    end
+
+    def self.spreadsheet_url(spreadsheet_id, gid: nil)
+      url = format(EDIT_URI, spreadsheet_id)
+      return url if gid.nil? || gid.to_s.empty?
+
+      "#{url}?gid=#{gid}#gid=#{gid}"
+    end
+
+    def self.terminal_link(text, url)
+      label = text.to_s
+      return label if url.to_s.empty?
+
+      "\e]8;;#{url}\e\\#{label}\e]8;;\e\\"
     end
 
     def self.quote_sheet(title)

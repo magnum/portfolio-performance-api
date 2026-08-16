@@ -1,8 +1,8 @@
 # Portfolio Performance API
 
-API Ruby (Sinatra + Puma) che legge un file `.portfolio` (da Google Drive o da disco) e restituisce i **saldi dei conti liquidi e dei conti titoli**. Include anche due utility: import movimenti Fineco e sync bidirezionale con Google Sheets.
+Ruby API (Sinatra + Puma) that reads a `.portfolio` file (from Google Drive or disk) and returns **balances for cash accounts and securities accounts**. It also includes two utilities: Fineco transaction import and bidirectional Google Sheets sync.
 
-File demo per prove e test: `test/test.portfolio` (password `portfolio`).
+Demo file for trials and tests: `test/test.portfolio` (password `portfolio`).
 
 ## Setup
 
@@ -11,32 +11,32 @@ cp env.example .env
 bundle install
 ```
 
-Per Drive/Sheets: abilita **Google Drive API** e **Google Sheets API**, crea un **service account**, scarica il JSON. Condividi i file con l’email `…@….iam.gserviceaccount.com` (Viewer per la sola API, **Editor** per sync e test). Drive risponde 404 se il service account non ha accesso.
+For Drive/Sheets: enable the **Google Drive API** and **Google Sheets API**, create a **service account**, and download the JSON. Share the files with the `…@….iam.gserviceaccount.com` email (Viewer for the API only, **Editor** for sync and tests). Drive returns 404 if the service account has no access.
 
-| Variabile | Serve per | Descrizione |
+| Variable | Used by | Description |
 | --- | --- | --- |
-| `API_KEY` | API | Chiave in `X-Api-Key`, `Authorization: Bearer` o `?apikey=` |
-| `PORTFOLIO_PASSWORD` | API, Fineco, sync | Password del `.portfolio` cifrato |
-| `PORTFOLIO_GOOGLE_DRIVE_FILE_ID` | API, sync | Id (o URL) del `.portfolio` su Drive |
-| `PORTFOLIO_FILE` | API locale | Path a un `.portfolio` su disco, se Drive non è configurato |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | Drive/Sheets | Contenuto JSON del service account |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Drive/Sheets | Alternativa: path al JSON |
-| `SYNC_GOOGLE_DRIVE_FILE_ID` | sync | Spreadsheet di sync |
-| `SYNC_GOOGLE_DRIVE_FILE_ID_TEST` | test live | Spreadsheet usato dai test di sync |
-| `SYNC_GOOGLE_DRIVE_FILE_SKIP_ROWS` | sync | Righe da non toccare in cima a ogni foglio. Default `0` |
-| `SYNC_GOOGLE_DRIVE_ROWS_CHUNK` | sync | Righe scritte per richiesta Sheets. Default `100` |
-| `SYNC_GOOGLE_DRIVE_PREVIEW_ROWS` | sync | Righe visibili per lista nel preview. Default `20` |
-| `IMPORT_FINECO_XLS_SKIP_LINES` | Fineco | Righe da saltare nell’export. Default `13` |
+| `API_KEY` | API | Key in `X-Api-Key`, `Authorization: Bearer`, or `?apikey=` |
+| `PORTFOLIO_PASSWORD` | API, Fineco, sync | Password for the encrypted `.portfolio` |
+| `PORTFOLIO_GOOGLE_DRIVE_FILE_ID` | API, sync | Id (or URL) of the `.portfolio` on Drive |
+| `PORTFOLIO_FILE` | local API | Path to a `.portfolio` on disk, if Drive is not configured |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Drive/Sheets | Service account JSON contents |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Drive/Sheets | Alternative: path to the JSON |
+| `SYNC_GOOGLE_DRIVE_FILE_ID` | sync | Sync spreadsheet |
+| `SYNC_GOOGLE_DRIVE_FILE_ID_TEST` | live tests | Spreadsheet used by sync tests |
+| `SYNC_GOOGLE_DRIVE_FILE_SKIP_ROWS` | sync | Rows to leave untouched at the top of each sheet. Default `0` |
+| `SYNC_GOOGLE_DRIVE_ROWS_CHUNK` | sync | Rows written per Sheets request. Default `100` |
+| `SYNC_GOOGLE_DRIVE_PREVIEW_ROWS` | sync | Visible rows per list in the preview. Default `20` |
+| `IMPORT_FINECO_XLS_SKIP_LINES` | Fineco | Rows to skip in the export. Default `13` |
 | `CACHE_TTL_MINUTES` | API | Default `15` |
 | `INCLUDE_RETIRED` | API | Default `true` |
 | `PORT` | API | Default `9292` |
 
 ## API
 
-Espone i saldi del portafoglio in JSON o CSV. Scarica il `.portfolio` da Drive (o legge `PORTFOLIO_FILE`), lo decifra, calcola il saldo di ogni conto deposito e il valore di mercato di ogni conto titoli, e tiene il risultato in cache per `CACHE_TTL_MINUTES` (`?nocache` forza un refresh).
+Exposes portfolio balances as JSON or CSV. It downloads the `.portfolio` from Drive (or reads `PORTFOLIO_FILE`), decrypts it, computes the balance of each deposit account and the market value of each securities account, and caches the result for `CACHE_TTL_MINUTES` (`?nocache` forces a refresh).
 
 ```bash
-# Prova locale con il file demo, senza Drive
+# Local trial with the demo file, no Drive
 API_KEY=dev PORTFOLIO_FILE=test/test.portfolio PORTFOLIO_PASSWORD=portfolio \
   bundle exec puma -C config/puma.rb
 
@@ -48,9 +48,9 @@ curl -sS "http://127.0.0.1:9292/accounts.csv?apikey=dev&locale=it"
 curl -sS -H "X-Api-Key: dev" "http://127.0.0.1:9292/accounts?nocache"
 ```
 
-`GET /accounts` e `GET /accounts.json` → JSON. `GET /accounts.csv` → CSV UTF-8, separatore `;` (decimali `.` con `locale=en`, `,` con `locale=it`). `GET /health` è pubblico. `GET /` è uguale a `/accounts`.
+`GET /accounts` and `GET /accounts.json` → JSON. `GET /accounts.csv` → UTF-8 CSV, `;` separator (`.` decimals with `locale=en`, `,` with `locale=it`). `GET /health` is public. `GET /` is the same as `/accounts`.
 
-Ogni riga ha `kind`: `deposit` (cassa) o `securities` (titoli, senza conversione FX). I conti titoli includono `reference_account_uuid`.
+Each row has `kind`: `deposit` (cash) or `securities` (no FX conversion). Securities accounts include `reference_account_uuid`.
 
 Docker:
 
@@ -59,61 +59,64 @@ docker build -t portfolio-performance-api .
 docker run --env-file .env -p 9292:80 portfolio-performance-api
 ```
 
-## Import Fineco
+## Fineco import
 
-Importa i movimenti da un export Fineco (`.xls` / `.xlsx`) in un `.portfolio` protobuf. Propone solo le righe con data **successiva** all’ultima transazione del conto; tu scegli quali importare. Usa `Data_Valuta`, `Entrate` → `DEPOSIT`, `Uscite` → `REMOVAL`. La note è `Descrizione Descrizione_Completa Categoria: Moneymap`. Prima di scrivere crea un backup `nome-YYYYMMDDTHHMMSS.portfolio`.
+Imports transactions from a Fineco export (`.xls` / `.xlsx`) into a protobuf `.portfolio`. It only proposes rows dated **after** the account’s last transaction; you choose which ones to import. It uses `Data_Valuta`, `Entrate` → `DEPOSIT`, `Uscite` → `REMOVAL`. The note is `Descrizione Descrizione_Completa Categoria: Moneymap`. Before writing it creates a backup `name-YYYYMMDDTHHMMSS.portfolio`.
 
-Serve un terminale interattivo e `bundle install` senza `BUNDLE_WITHOUT=utils`. Chiudi Portfolio Performance prima di importare.
+Needs an interactive terminal and `bundle install` without `BUNDLE_WITHOUT=utils`. Close Portfolio Performance before importing.
 
 ```bash
 ruby utils/import-fineco.rb EUR010069756 $HOME/finance/portfolio1.portfolio ./movements.xlsx
 ```
 
-↑/↓ per muoversi, spazio per selezionare, prima riga `toggle all`, Invio per confermare, poi `y`. Password: `PORTFOLIO_PASSWORD` oppure viene chiesta.
+↑/↓ to move, space to select, first row `toggle all`, Enter to confirm, then `y`. Password: `PORTFOLIO_PASSWORD`, or you are prompted.
 
-## Sync spreadsheet
+## Spreadsheet sync
 
-Allinea in entrambi i sensi i movimenti di ogni conto deposito e conto titoli del `.portfolio` su Drive (`PORTFOLIO_GOOGLE_DRIVE_FILE_ID`) con uno spreadsheet (`SYNC_GOOGLE_DRIVE_FILE_ID`). Per ogni account prepara due piani, mostra le liste **PORTFOLIO** e **SPREADSHEET**, poi chiede cosa scrivere.
+Aligns transactions both ways for every deposit and securities account in the Drive `.portfolio` (`PORTFOLIO_GOOGLE_DRIVE_FILE_ID`) with a spreadsheet (`SYNC_GOOGLE_DRIVE_FILE_ID`). For each account it prepares two plans, shows the **PORTFOLIO** and **SPREADSHEET** lists, then asks what to write.
 
-Identità: hash SHA-256 di conto + data + importo + descrizione + destinazione (ricalcolato a runtime, non salvato). Create-or-update, senza cancellare. Il tipo nello spreadsheet vince; l’UUID di Portfolio Performance viene conservato. `amount` è un numero con decimale `.` (foglio locale US). Scrittura a blocchi di `SYNC_GOOGLE_DRIVE_ROWS_CHUNK` righe.
+Identity: SHA-256 hash of account + date + amount + description + destination (recomputed at runtime, not stored). Create-or-update, no deletes. Spreadsheet type wins; the Portfolio Performance UUID is kept. `amount` is a number with `.` decimal (US locale sheet). Writes in chunks of `SYNC_GOOGLE_DRIVE_ROWS_CHUNK` rows.
 
-Condividi spreadsheet e `.portfolio` come **Editor**. Chiudi Portfolio Performance prima del sync.
+Share the spreadsheet and `.portfolio` as **Editor**. Close Portfolio Performance before syncing.
 
 ```bash
 bin/sync
+bin/sync cleanup
 ```
 
-Tasti: ↑/↓ una riga, `u`/`v` pagina, **S** solo spreadsheet, **P** solo portfolio, **B** entrambi, **Esc** salta l’account. Il `.portfolio` viene ricaricato su Drive una sola volta alla fine se almeno un account ha scelto P o B.
+Keys: ↑/↓ one row, `u`/`v` page, **S** spreadsheet only, **P** portfolio only, **B** both, **Esc** skip the account. The `.portfolio` is uploaded to Drive once at the end if at least one account chose P or B.
 
-Colonne: `date`, `type`, `amount`, `currency`, `description`, `destination`, `uuid`. `SYNC_GOOGLE_DRIVE_FILE_SKIP_ROWS` lascia intatte le prime N righe.
+`bin/sync cleanup` clears one sheet at a time (rows above the header and the header stay). Confirm with `y` / `n` / `a` (all remaining sheets), **Esc** = no.
 
-## Test
+Columns: `date`, `type`, `amount`, `currency`, `description`, `destination`, `uuid`. `SYNC_GOOGLE_DRIVE_FILE_SKIP_ROWS` leaves the first N rows untouched.
 
-Il file demo `test/test.portfolio` (password `portfolio`) è il portafoglio di esempio di Portfolio Performance. I test di sync lo usano sempre. I test live (`test/sync_sheets_test.rb`) svuotano lo spreadsheet `SYNC_GOOGLE_DRIVE_FILE_ID_TEST`, creano un foglio per ogni conto e **lasciano i dati** alla fine (niente cleanup). Lo spreadsheet deve essere condiviso come Editor con il service account.
+## Tests
+
+The demo file `test/test.portfolio` (password `portfolio`) is Portfolio Performance’s sample portfolio. Sync tests always use it. Live tests (`test/sync_sheets_test.rb`) empty the `SYNC_GOOGLE_DRIVE_FILE_ID_TEST` spreadsheet, create one sheet per account, and **leave the data** at the end (no cleanup). The spreadsheet must be shared as Editor with the service account.
 
 ```bash
-# Tutta la suite (i test live si saltano se manca SYNC_GOOGLE_DRIVE_FILE_ID_TEST)
+# Full suite (live tests are skipped if SYNC_GOOGLE_DRIVE_FILE_ID_TEST is missing)
 bundle exec rake test
 
-# Solo sync in memoria sul file demo
+# In-memory sync only, on the demo file
 bundle exec rake test TEST=test/sync_demo_test.rb
 
-# Solo sync live verso lo spreadsheet di test
+# Live sync only, against the test spreadsheet
 bundle exec rake test TEST=test/sync_sheets_test.rb
 ```
 
-Senza `.env` completo la suite resta verde: i test Google vengono skippati.
+Without a complete `.env` the suite still passes: Google tests are skipped.
 
 ## Deploy (Kamal)
 
-Serve un VPS con Docker e SSH, e un dominio che punta al server. Le immagini restano sul registry locale (`localhost:5555`).
+Needs a VPS with Docker and SSH, and a domain pointing at the server. Images stay on the local registry (`localhost:5555`).
 
-1. In `config/deploy.yml` imposta l’IP del server e `proxy.host`.
+1. In `config/deploy.yml` set the server IP and `proxy.host`.
 2. `set -a && source .env && set +a`
-3. Primo setup: `bundle exec kamal setup`
-4. Deploy successivi: `bundle exec kamal deploy`
+3. First setup: `bundle exec kamal setup`
+4. Later deploys: `bundle exec kamal deploy`
 
-`kamal-proxy` ascolta 80/443, certificato Let’s Encrypt, healthcheck `GET /health`.
+`kamal-proxy` listens on 80/443, Let’s Encrypt certificate, healthcheck `GET /health`.
 
 ```bash
 bundle exec kamal logs

@@ -13,8 +13,13 @@ require_relative "sync_preview"
 
 module PortfolioPerformanceApi
   class Sync
-    def self.run
-      new.run
+    def self.run(argv = [])
+      command = Array(argv)[0].to_s
+      case command
+      when "", "sync" then new.run
+      when "cleanup" then new.cleanup
+      else abort "Usage: bin/sync [cleanup]"
+      end
     end
 
     def run
@@ -38,7 +43,8 @@ module PortfolioPerformanceApi
       chunk_size = Config.sync_rows_chunk
       preview_rows = Config.sync_preview_rows
       names = TransactionSync.uuid_names(loaded.client)
-      known_sheets = sheets.sheet_titles
+      gids = sheets.sheet_gids
+      known_sheets = gids.keys
       portfolio_changed = false
 
       unique_titles(TransactionSync.vehicles(loaded.client)).each do |title, vehicle|
@@ -46,7 +52,8 @@ module PortfolioPerformanceApi
         sheet_plan, portfolio_plan = account_plans(
           loaded.client, vehicle, raw_rows, names, skip_rows
         )
-        puts "#{vehicle.name}: spreadsheet +#{sheet_plan.create_sheet.size}/~#{sheet_plan.update_sheet.size}  " \
+        puts "#{sheet_link(vehicle.name, spreadsheet_id, gids[title])}: " \
+             "spreadsheet +#{sheet_plan.create_sheet.size}/~#{sheet_plan.update_sheet.size}  " \
              "portfolio +#{portfolio_plan.create_portfolio.size}/~#{portfolio_plan.update_portfolio.size}"
 
         if empty_plan?(sheet_plan) && empty_plan?(portfolio_plan)
@@ -96,6 +103,66 @@ module PortfolioPerformanceApi
       abort error.message
     end
 
+    def cleanup(sheets: nil, spreadsheet_id: nil, skip_rows: nil, titles: nil)
+      spreadsheet_id = spreadsheet_id.to_s.empty? ? Config.sync_drive_file_id : spreadsheet_id
+      skip_rows = skip_rows.nil? ? Config.sync_skip_rows : skip_rows
+      if sheets.nil?
+        abort "missing SYNC_GOOGLE_DRIVE_FILE_ID" if spreadsheet_id.to_s.empty?
+        abort "missing GOOGLE_SERVICE_ACCOUNT_JSON" if Config.service_account_json.to_s.empty?
+        abort "missing PORTFOLIO_GOOGLE_DRIVE_FILE_ID" if Config.drive_file_id.to_s.empty?
+
+        session = DriveClient.new(file_id: Config.drive_file_id, scope: DriveClient::SYNC_SCOPE)
+        sheets = SheetsClient.new(session: session, spreadsheet_id: spreadsheet_id)
+        downloaded = session.download
+        loaded = PortfolioStore.load_bytes(
+          downloaded.fetch(:bytes),
+          password: Config.portfolio_password,
+          path: downloaded.dig(:meta, :name)
+        )
+        titles ||= unique_titles(TransactionSync.vehicles(loaded.client)).keys
+      end
+      gids = sheets.respond_to?(:sheet_gids) ? sheets.sheet_gids : {}
+      titles ||= gids.keys
+      known_sheets = gids.keys
+      known_sheets = sheets.sheet_titles if known_sheets.empty?
+
+      clear_rest = false
+      titles.each do |title|
+        unless known_sheets.include?(title)
+          puts "#{title}: no sheet, skipped"
+          next
+        end
+        raw_rows = sheets.read_rows(title)
+        unless data_rows?(raw_rows, skip_rows)
+          puts "#{title}: already empty"
+          next
+        end
+        unless clear_rest
+          choice = confirm_cleanup(spreadsheet_id, title, gid: gids[title])
+          if choice == :no
+            puts "#{title}: skipped"
+            next
+          end
+          clear_rest = true if choice == :all
+        end
+        sheets.clear_data_rows(title, skip_rows: skip_rows)
+        puts "#{title}: spreadsheet rows cleared"
+      end
+    rescue Error, ArgumentError => error
+      abort error.message
+    end
+
+    def self.confirm_choice(answer)
+      text = answer.to_s
+      return :no if text.empty? || text == "\e" || text.start_with?("\e")
+
+      case text.strip.upcase
+      when "Y", "YES" then :yes
+      when "A", "ALL" then :all
+      else :no
+      end
+    end
+
     private
 
     def account_plans(client, vehicle, raw_rows, names, skip_rows)
@@ -138,6 +205,38 @@ module PortfolioPerformanceApi
     def unique_titles(accounts)
       titles = SheetsClient.unique_titles(accounts.map(&:name))
       titles.zip(accounts).to_h
+    end
+
+    def data_rows?(raw_rows, skip_rows)
+      Array(raw_rows)[(Integer(skip_rows) + 1)..]&.any? { |row| Array(row).any? { |cell| !cell.to_s.strip.empty? } }
+    end
+
+    def sheet_link(label, spreadsheet_id, gid = nil)
+      SheetsClient.terminal_link(label, SheetsClient.spreadsheet_url(spreadsheet_id, gid: gid))
+    end
+
+    def confirm_cleanup(spreadsheet_id, title, gid: nil)
+      linked_id = sheet_link(spreadsheet_id, spreadsheet_id)
+      linked_sheet = sheet_link(title, spreadsheet_id, gid)
+      prompt = "All rows > headers in #{linked_id}, sheet #{linked_sheet} will be deleted: are you sure? y/n/a "
+      $stderr.print prompt
+      $stderr.flush
+      choice = $stdin.tty? ? read_cleanup_key : self.class.confirm_choice($stdin.gets.to_s)
+      $stderr.puts({ yes: "y", no: "n", all: "a" }.fetch(choice))
+      choice
+    end
+
+    def read_cleanup_key
+      reader = TTY::Reader.new(interrupt: :exit)
+      choice = nil
+      reader.on(:keyescape) { choice = :no }
+      reader.on(:keypress) do |event|
+        choice = :yes if %w[y Y].include?(event.value)
+        choice = :no if %w[n N].include?(event.value) || event.value == "\e"
+        choice = :all if %w[a A].include?(event.value)
+      end
+      reader.read_keypress until choice
+      choice
     end
   end
 end

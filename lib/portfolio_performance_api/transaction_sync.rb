@@ -152,7 +152,7 @@ module PortfolioPerformanceApi
       date = parse_date(cells[mapping[:date]])
       amount = parse_signed_cents(cells[mapping[:amount]])
       description = normalize_description(cells[mapping[:description]])
-      return if date.nil? || amount.nil? || amount.zero?
+      return if date.nil? || amount.nil?
 
       type = normalize_type(cells[mapping[:type]], amount)
       return if type.nil?

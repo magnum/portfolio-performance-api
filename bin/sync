@@ -10,4 +10,4 @@ $LOAD_PATH.unshift(File.join(root, "lib"))
 
 require "portfolio_performance_api/sync"
 
-PortfolioPerformanceApi::Sync.run
+PortfolioPerformanceApi::Sync.run(ARGV)

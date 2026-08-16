@@ -56,6 +56,35 @@ class TransactionSyncTest < Minitest::Test
     refute_includes PortfolioPerformanceApi::TransactionSync.to_sheet_row(proto), proto.id
   end
 
+  def test_zero_amount_inbound_delivery_round_trips
+    stamp = Google::Protobuf::Timestamp.new(seconds: Time.utc(2022, 1, 28).to_i)
+    tx = PortfolioPerformanceApi::Proto::PTransaction.new(
+      uuid: "u-dust",
+      type: :INBOUND_DELIVERY,
+      portfolio: "port-crypto",
+      date: stamp,
+      currencyCode: "EUR",
+      amount: 0,
+      shares: 1_000_000,
+      note: "Airdrop"
+    )
+    vehicle = PortfolioPerformanceApi::TransactionSync::Vehicle.new(
+      kind: :securities, name: "Crypto", uuid: "port-crypto", currency: "EUR"
+    )
+    proto = PortfolioPerformanceApi::TransactionSync.from_proto(tx, vehicle)
+    row = PortfolioPerformanceApi::TransactionSync.to_sheet_row(proto)
+    parsed = PortfolioPerformanceApi::TransactionSync.from_sheet_row(row, "Crypto", currency: "EUR")
+    plan = PortfolioPerformanceApi::TransactionSync.plan([proto], [parsed])
+
+    assert_equal 0, proto.signed_cents
+    assert_equal 0.0, row[2]
+    assert_equal proto.id, parsed.id
+    assert_equal "u-dust", parsed.uuid
+    assert_empty plan.create_sheet
+    assert_empty plan.update_sheet
+    assert_empty plan.create_portfolio
+  end
+
   def test_cash_transfer_uses_destination_account_name
     client = protobuf_client
     stamp = Google::Protobuf::Timestamp.new(seconds: Time.utc(2026, 8, 14).to_i)
@@ -236,6 +265,18 @@ class TransactionSyncTest < Minitest::Test
     assert_equal "Conto-titoli", PortfolioPerformanceApi::SheetsClient.sanitize_title("Conto/titoli")
     assert_equal "Account", PortfolioPerformanceApi::SheetsClient.sanitize_title("   ")
     assert_equal 100, PortfolioPerformanceApi::SheetsClient.sanitize_title("A" * 140).size
+  end
+
+  def test_spreadsheet_url_and_terminal_link
+    url = PortfolioPerformanceApi::SheetsClient.spreadsheet_url("ssid")
+    sheet = PortfolioPerformanceApi::SheetsClient.spreadsheet_url("ssid", gid: 42)
+    linked = PortfolioPerformanceApi::SheetsClient.terminal_link("EUR010069756", sheet)
+
+    assert_equal "https://docs.google.com/spreadsheets/d/ssid/edit", url
+    assert_equal "https://docs.google.com/spreadsheets/d/ssid/edit?gid=42#gid=42", sheet
+    assert_includes linked, "\e]8;;#{sheet}\e\\"
+    assert_includes linked, "EUR010069756"
+    assert_includes linked, "\e]8;;\e\\"
   end
 
   def test_sheet_row_has_destination_and_no_id

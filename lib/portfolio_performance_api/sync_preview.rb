@@ -95,7 +95,7 @@ module PortfolioPerformanceApi
     def static_choice
       render_lines.each { |line| $stdout.puts line }
       loop do
-        $stderr.print "[#{@account_name}] write (S)spreadsheet, (P)ortfolio or (B)oth? "
+        $stderr.print "write (S)spreadsheet, (P)ortfolio or (B)oth? "
         answer = $stdin.gets.to_s.strip.upcase
         return answer if %w[S P B].include?(answer)
         return "N" if answer.empty? || answer == "\e"
