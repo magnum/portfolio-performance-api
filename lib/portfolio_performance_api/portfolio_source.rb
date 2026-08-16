@@ -23,7 +23,7 @@ module PortfolioPerformanceApi
         }
       else
         raise NotConfigured,
-              "configure GOOGLE_DRIVE_FILE_ID + service account, or PORTFOLIO_FILE"
+              "configure PORTFOLIO_GOOGLE_DRIVE_FILE_ID + service account, or PORTFOLIO_FILE"
       end
     end
   end

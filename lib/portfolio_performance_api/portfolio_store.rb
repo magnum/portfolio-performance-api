@@ -11,7 +11,11 @@ module PortfolioPerformanceApi
     )
 
     def self.load(path, password:)
-      raw = File.binread(path).b
+      load_bytes(File.binread(path), password: password, path: path)
+    end
+
+    def self.load_bytes(raw, password:, path: nil)
+      raw = raw.b
       encrypted = Decryptor.encrypted?(raw)
       if encrypted
         payload = Decryptor.decrypt(raw, password)
@@ -49,13 +53,13 @@ module PortfolioPerformanceApi
       )
     end
 
-    def self.save(loaded)
+    def self.dump(loaded)
       proto = FileReader::PROTO_MAGIC + loaded.client.to_proto
       # Encrypted PP files store protobuf in zip entry "data" and, on open,
       # read only the first entry. Unencrypted zips use "data.portfolio".
       entry_name = loaded.encrypted ? "data" : "data.portfolio"
       zip_bytes = write_zip({ entry_name => proto })
-      bytes = if loaded.encrypted
+      if loaded.encrypted
         Decryptor.encrypt(
           zip_bytes,
           loaded.password,
@@ -66,7 +70,12 @@ module PortfolioPerformanceApi
       else
         zip_bytes
       end
-      File.binwrite(loaded.path, bytes)
+    end
+
+    def self.save(loaded)
+      raise ArgumentError, "portfolio path is missing" if loaded.path.to_s.empty?
+
+      File.binwrite(loaded.path, dump(loaded))
     end
 
     def self.backup_path(path, at: Time.now)

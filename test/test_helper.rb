@@ -12,12 +12,15 @@ ENV["API_KEY"] ||= "test-key"
 ENV["PORTFOLIO_PASSWORD"] ||= "secret"
 ENV["CACHE_TTL_MINUTES"] ||= "15"
 ENV["INCLUDE_RETIRED"] ||= "true"
-ENV.delete("GOOGLE_DRIVE_FILE_ID")
+ENV.delete("PORTFOLIO_GOOGLE_DRIVE_FILE_ID")
 ENV.delete("GOOGLE_SERVICE_ACCOUNT_JSON")
 ENV.delete("GOOGLE_APPLICATION_CREDENTIALS")
 ENV.delete("PORTFOLIO_FILE")
 
 require_relative "../lib/portfolio_performance_api"
+
+DEMO_PORTFOLIO_PATH = File.expand_path("test.portfolio", __dir__)
+DEMO_PORTFOLIO_PASSWORD = "portfolio"
 
 module PortfolioFixtures
   XML = <<~XML

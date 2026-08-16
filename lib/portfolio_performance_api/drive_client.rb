@@ -11,15 +11,18 @@ module PortfolioPerformanceApi
   class DriveClient
     TOKEN_URI = URI("https://oauth2.googleapis.com/token")
     SCOPE = "https://www.googleapis.com/auth/drive.readonly"
+    SYNC_SCOPE = "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/spreadsheets"
     FILE_URI = "https://www.googleapis.com/drive/v3/files/%s"
+    UPLOAD_URI = "https://www.googleapis.com/upload/drive/v3/files/%s"
     SHORTCUT_MIME = "application/vnd.google-apps.shortcut"
     META_FIELDS = "id,name,modifiedTime,md5Checksum,size,mimeType,shortcutDetails"
 
-    def initialize(credentials_json: Config.service_account_json, file_id: Config.drive_file_id)
+    def initialize(credentials_json: Config.service_account_json, file_id: Config.drive_file_id, scope: SCOPE)
       raise NotConfigured, "Google Drive is not configured" if credentials_json.to_s.empty? || file_id.to_s.empty?
 
       @credentials = JSON.parse(credentials_json)
       @file_id = file_id
+      @scope = scope
       @token = nil
       @token_expires_at = Time.at(0)
     end
@@ -38,6 +41,17 @@ module PortfolioPerformanceApi
           size: meta["size"]&.to_i
         }
       }
+    end
+
+    def upload(bytes, mime_type: "application/octet-stream")
+      uri = URI(format(UPLOAD_URI, @file_id))
+      uri.query = URI.encode_www_form("uploadType" => "media", "supportsAllDrives" => "true")
+      request(uri, method: :patch, body: bytes, content_type: mime_type)
+      true
+    end
+
+    def api_request(uri, method: :get, body: nil, content_type: "application/json")
+      request(uri, method: method, body: body, content_type: content_type)
     end
 
     private
@@ -75,20 +89,33 @@ module PortfolioPerformanceApi
       request(uri).body.b
     end
 
-    def request(uri)
+    def request(uri, method: :get, body: nil, content_type: nil)
       http = Net::HTTP.new(uri.host, uri.port)
       http.use_ssl = true
       http.open_timeout = 10
       http.read_timeout = 60
 
-      req = Net::HTTP::Get.new(uri)
+      req = http_class(method).new(uri)
       req["Authorization"] = "Bearer #{access_token}"
+      req["Content-Type"] = content_type if content_type
+      req.body = body if body
       response = http.request(req)
       unless response.is_a?(Net::HTTPSuccess)
         raise DriveError, format_drive_error(response)
       end
 
       response
+    end
+
+    def http_class(method)
+      case method
+      when :get then Net::HTTP::Get
+      when :post then Net::HTTP::Post
+      when :put then Net::HTTP::Put
+      when :patch then Net::HTTP::Patch
+      else
+        raise ArgumentError, "unsupported HTTP method #{method}"
+      end
     end
 
     def format_drive_error(response)
@@ -127,7 +154,7 @@ module PortfolioPerformanceApi
       header = b64({ alg: "RS256", typ: "JWT" }.to_json)
       payload = b64({
         iss: @credentials.fetch("client_email"),
-        scope: SCOPE,
+        scope: @scope,
         aud: TOKEN_URI.to_s,
         iat: now,
         exp: now + 3600

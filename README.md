@@ -1,53 +1,56 @@
 # Portfolio Performance API
 
-API Ruby (Sinatra + Puma) che scarica un file `.portfolio` cifrato da Google Drive, lo decifra e restituisce i **saldi dei conti liquidi e dei conti titoli** in JSON o CSV.
+API Ruby (Sinatra + Puma) che legge un file `.portfolio` (da Google Drive o da disco) e restituisce i **saldi dei conti liquidi e dei conti titoli**. Include anche due utility: import movimenti Fineco e sync bidirezionale con Google Sheets.
 
-## Cosa fa
+File demo per prove e test: `test/test.portfolio` (password `portfolio`).
 
-1. Autenticazione con API key: header `X-Api-Key`, `Authorization: Bearer …`, oppure query string `?apikey=`, valore da `API_KEY`
-2. Download del file da Google Drive con un service account
-3. Decrypt AES-128/256 come Portfolio Performance (PBKDF2-HMAC-SHA1, 65536 iterazioni)
-4. Lettura XML o protobuf (il formato binario interno)
-5. Calcolo del saldo per ogni conto deposito (`Account#getCurrentAmount`) e del valore di mercato per ogni conto titoli
-6. Cache in memoria per `CACHE_TTL_MINUTES` minuti; `?nocache` forza un nuovo download
-
-## Setup Google Drive
-
-1. Crea un progetto su Google Cloud e abilita **Google Drive API**
-2. Crea un **service account**, scarica il JSON della chiave
-3. Condividi il file `.portfolio` (Viewer) con l’email del service account (`…@….iam.gserviceaccount.com`). Drive risponde 404 se il service account non ha accesso, anche se il link si apre nel browser.
-4. Copia l’id del file dall’URL (`/d/<FILE_ID>/` oppure `?id=<FILE_ID>`).
-
-## Configurazione
-
-Copia `env.example` in `.env`:
+## Setup
 
 ```bash
 cp env.example .env
+bundle install
 ```
 
-| Variabile | Obbligatoria | Descrizione |
+Per Drive/Sheets: abilita **Google Drive API** e **Google Sheets API**, crea un **service account**, scarica il JSON. Condividi i file con l’email `…@….iam.gserviceaccount.com` (Viewer per la sola API, **Editor** per sync e test). Drive risponde 404 se il service account non ha accesso.
+
+| Variabile | Serve per | Descrizione |
 | --- | --- | --- |
-| `API_KEY` | sì | Chiave in `X-Api-Key`, `Authorization: Bearer` o `?apikey=` |
-| `PORTFOLIO_PASSWORD` | per file cifrati | Password del `.portfolio` |
-| `IMPORT_FINECO_XLS_SKIP_LINES` | no | Righe da saltare nell’export Fineco. Default `13` |
-| `GOOGLE_DRIVE_FILE_ID` | sì* | Id (o URL) del file su Drive |
-| `GOOGLE_SERVICE_ACCOUNT_JSON` | sì* | Contenuto JSON del service account |
-| `GOOGLE_APPLICATION_CREDENTIALS` | alternativa | Path al JSON del service account |
-| `CACHE_TTL_MINUTES` | no | Default `15` |
-| `PORTFOLIO_FILE` | no | File locale, utile in sviluppo/test se Drive non è configurato |
-| `INCLUDE_RETIRED` | no | Default `true`. `false` esclude i conti archiviati |
-| `API_KEY_HEADER` | no | Default `X-Api-Key` |
-| `PORT` | no | Default `9292` |
+| `API_KEY` | API | Chiave in `X-Api-Key`, `Authorization: Bearer` o `?apikey=` |
+| `PORTFOLIO_PASSWORD` | API, Fineco, sync | Password del `.portfolio` cifrato |
+| `PORTFOLIO_GOOGLE_DRIVE_FILE_ID` | API, sync | Id (o URL) del `.portfolio` su Drive |
+| `PORTFOLIO_FILE` | API locale | Path a un `.portfolio` su disco, se Drive non è configurato |
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | Drive/Sheets | Contenuto JSON del service account |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Drive/Sheets | Alternativa: path al JSON |
+| `SYNC_GOOGLE_DRIVE_FILE_ID` | sync | Spreadsheet di sync |
+| `SYNC_GOOGLE_DRIVE_FILE_ID_TEST` | test live | Spreadsheet usato dai test di sync |
+| `SYNC_GOOGLE_DRIVE_FILE_SKIP_ROWS` | sync | Righe da non toccare in cima a ogni foglio. Default `0` |
+| `SYNC_GOOGLE_DRIVE_ROWS_CHUNK` | sync | Righe scritte per richiesta Sheets. Default `100` |
+| `SYNC_GOOGLE_DRIVE_PREVIEW_ROWS` | sync | Righe visibili per lista nel preview. Default `20` |
+| `IMPORT_FINECO_XLS_SKIP_LINES` | Fineco | Righe da saltare nell’export. Default `13` |
+| `CACHE_TTL_MINUTES` | API | Default `15` |
+| `INCLUDE_RETIRED` | API | Default `true` |
+| `PORT` | API | Default `9292` |
 
-\* In produzione usa Drive. In locale puoi puntare `PORTFOLIO_FILE` a una copia del `.portfolio`.
+## API
 
-## Avvio
+Espone i saldi del portafoglio in JSON o CSV. Scarica il `.portfolio` da Drive (o legge `PORTFOLIO_FILE`), lo decifra, calcola il saldo di ogni conto deposito e il valore di mercato di ogni conto titoli, e tiene il risultato in cache per `CACHE_TTL_MINUTES` (`?nocache` forza un refresh).
 
 ```bash
-bundle install
-bundle exec puma -C config/puma.rb
+# Prova locale con il file demo, senza Drive
+API_KEY=dev PORTFOLIO_FILE=test/test.portfolio PORTFOLIO_PASSWORD=portfolio \
+  bundle exec puma -C config/puma.rb
+
+curl -sS -H "X-Api-Key: dev" http://127.0.0.1:9292/health
+curl -sS -H "X-Api-Key: dev" http://127.0.0.1:9292/accounts
+curl -sS -H "X-Api-Key: dev" http://127.0.0.1:9292/accounts.json
+curl -sS -H "X-Api-Key: dev" http://127.0.0.1:9292/accounts.csv
+curl -sS "http://127.0.0.1:9292/accounts.csv?apikey=dev&locale=it"
+curl -sS -H "X-Api-Key: dev" "http://127.0.0.1:9292/accounts?nocache"
 ```
+
+`GET /accounts` e `GET /accounts.json` → JSON. `GET /accounts.csv` → CSV UTF-8, separatore `;` (decimali `.` con `locale=en`, `,` con `locale=it`). `GET /health` è pubblico. `GET /` è uguale a `/accounts`.
+
+Ogni riga ha `kind`: `deposit` (cassa) o `securities` (titoli, senza conversione FX). I conti titoli includono `reference_account_uuid`.
 
 Docker:
 
@@ -56,88 +59,63 @@ docker build -t portfolio-performance-api .
 docker run --env-file .env -p 9292:80 portfolio-performance-api
 ```
 
-## Deploy (Kamal)
-
-Serve un VPS con Docker e SSH, e un dominio che punta al server. Le immagini restano sul registry locale (`localhost:5555`): Kamal lo avvia sul Mac e lo espone al VPS con un tunnel SSH, senza Docker Hub o GHCR.
-
-1. In `config/deploy.yml` imposta l’IP del server e `proxy.host`.
-2. Carica i secret e fai il primo setup:
-
-```bash
-set -a && source .env && set +a
-bundle exec kamal setup
-```
-
-I deploy successivi:
-
-```bash
-set -a && source .env && set +a
-bundle exec kamal deploy
-```
-
-`kamal-proxy` ascolta 80/443, ottiene il certificato Let’s Encrypt e inoltra a Puma sulla porta 80 del container. Healthcheck: `GET /health`.
-
-```bash
-bundle exec kamal logs
-bundle exec kamal shell
-```
-
-## Uso
-
-```bash
-curl -sS -H "X-Api-Key: $API_KEY" http://127.0.0.1:9292/accounts
-curl -sS -H "X-Api-Key: $API_KEY" http://127.0.0.1:9292/accounts.json
-curl -sS -H "X-Api-Key: $API_KEY" http://127.0.0.1:9292/accounts.csv
-curl -sS "http://127.0.0.1:9292/accounts.csv?apikey=$API_KEY"
-curl -sS -H "X-Api-Key: $API_KEY" "http://127.0.0.1:9292/accounts?nocache"
-```
-
-Esempio di risposta:
-
-```json
-{
-  "base_currency": "EUR",
-  "version": 70,
-  "accounts": [
-    {
-      "uuid": "…",
-      "kind": "deposit",
-      "name": "Conto corrente",
-      "currency": "EUR",
-      "retired": false,
-      "balance": 875.0,
-      "balance_cents": 87500
-    }
-  ],
-  "totals": [{ "currency": "EUR", "balance": 990.01, "balance_cents": 99001 }],
-  "file": { "source": "google_drive", "name": "wealth.portfolio", "modified_at": "…" },
-  "format": "protobuf",
-  "cached": false,
-  "cached_at": "2026-08-14T20:00:00Z",
-  "expires_at": "2026-08-14T20:15:00Z"
-}
-```
-
-`GET /accounts` e `GET /accounts.json` restituiscono JSON. `GET /accounts.csv` restituisce un CSV (UTF-8, separatore `;`). I decimali dipendono da `locale` (default `en`, punto; `locale=it`, virgola), es. `/accounts.csv?locale=it`. Importabile in Google Sheets: **File → Importa → Carica**, tipo separatore *punto e virgola*, oppure `IMPORTDATA("http://…/accounts.csv?apikey=…")`.
-
-In development Sinatra ricarica i file in `lib/` a ogni richiesta, senza riavviare Puma.
-
-`GET /health` è pubblico. `GET /` è uguale a `GET /accounts`. Header, Bearer e `?apikey=` sono equivalenti; se è presente l’header, vince lui.
-
-Ogni riga ha `kind`: `deposit` (conto liquido, saldo da movimenti di cassa) oppure `securities` (conto titoli, valore di mercato al prezzo più recente, senza conversione FX). I conti titoli includono anche `reference_account_uuid`.
-
 ## Import Fineco
 
-`utils/import-fineco.rb` importa movimenti da un export Fineco (`.xls` / `.xlsx`) in un `.portfolio` protobuf. Serve un terminale interattivo e le gemme del gruppo `utils` (`bundle install` senza `BUNDLE_WITHOUT`).
+Importa i movimenti da un export Fineco (`.xls` / `.xlsx`) in un `.portfolio` protobuf. Propone solo le righe con data **successiva** all’ultima transazione del conto; tu scegli quali importare. Usa `Data_Valuta`, `Entrate` → `DEPOSIT`, `Uscite` → `REMOVAL`. La note è `Descrizione Descrizione_Completa Categoria: Moneymap`. Prima di scrivere crea un backup `nome-YYYYMMDDTHHMMSS.portfolio`.
+
+Serve un terminale interattivo e `bundle install` senza `BUNDLE_WITHOUT=utils`. Chiudi Portfolio Performance prima di importare.
 
 ```bash
 ruby utils/import-fineco.rb EUR010069756 $HOME/finance/portfolio1.portfolio ./movements.xlsx
 ```
 
-Parametri: nome (o UUID) del conto deposito, file `.portfolio`, export Fineco. `IMPORT_FINECO_XLS_SKIP_LINES` (default `13`) salta le righe di intestazione Fineco. La data usata è `Data_Valuta` (non `Data_Operazione`). L’importo è quello valorizzato in `Entrate` (`DEPOSIT`) o `Uscite` (`REMOVAL`, anche se negativo). La note in Portfolio Performance è `Descrizione Descrizione_Completa Categoria: Moneymap`. Vengono proposte solo le righe con data **successiva** all’ultima transazione di quel conto. ↑/↓ per muoversi, spazio per selezionare, la prima riga `toggle all` seleziona o deseleziona tutto, Invio per confermare. Dopo `y` viene creato un backup `nome-YYYYMMDDTHHMMSS.portfolio` e le transazioni vengono scritte nel file originale. La password del portafoglio cifrato è `PORTFOLIO_PASSWORD` oppure viene chiesta.
+↑/↓ per muoversi, spazio per selezionare, prima riga `toggle all`, Invio per confermare, poi `y`. Password: `PORTFOLIO_PASSWORD` oppure viene chiesta.
+
+## Sync spreadsheet
+
+Allinea in entrambi i sensi i movimenti di ogni conto deposito e conto titoli del `.portfolio` su Drive (`PORTFOLIO_GOOGLE_DRIVE_FILE_ID`) con uno spreadsheet (`SYNC_GOOGLE_DRIVE_FILE_ID`). Per ogni account prepara due piani, mostra le liste **PORTFOLIO** e **SPREADSHEET**, poi chiede cosa scrivere.
+
+Identità: hash SHA-256 di conto + data + importo + descrizione + destinazione (ricalcolato a runtime, non salvato). Create-or-update, senza cancellare. Il tipo nello spreadsheet vince; l’UUID di Portfolio Performance viene conservato. `amount` è un numero con decimale `.` (foglio locale US). Scrittura a blocchi di `SYNC_GOOGLE_DRIVE_ROWS_CHUNK` righe.
+
+Condividi spreadsheet e `.portfolio` come **Editor**. Chiudi Portfolio Performance prima del sync.
+
+```bash
+ruby bin/utils/sync.rb
+```
+
+Tasti: ↑/↓ una riga, `u`/`v` pagina, **S** solo spreadsheet, **P** solo portfolio, **B** entrambi, **Esc** salta l’account. Il `.portfolio` viene ricaricato su Drive una sola volta alla fine se almeno un account ha scelto P o B.
+
+Colonne: `date`, `type`, `amount`, `currency`, `description`, `destination`, `uuid`. `SYNC_GOOGLE_DRIVE_FILE_SKIP_ROWS` lascia intatte le prime N righe.
 
 ## Test
 
+Il file demo `test/test.portfolio` (password `portfolio`) è il portafoglio di esempio di Portfolio Performance. I test di sync lo usano sempre. I test live (`test/sync_sheets_test.rb`) svuotano lo spreadsheet `SYNC_GOOGLE_DRIVE_FILE_ID_TEST`, creano un foglio per ogni conto e **lasciano i dati** alla fine (niente cleanup). Lo spreadsheet deve essere condiviso come Editor con il service account.
+
 ```bash
+# Tutta la suite (i test live si saltano se manca SYNC_GOOGLE_DRIVE_FILE_ID_TEST)
 bundle exec rake test
+
+# Solo sync in memoria sul file demo
+bundle exec rake test TEST=test/sync_demo_test.rb
+
+# Solo sync live verso lo spreadsheet di test
+bundle exec rake test TEST=test/sync_sheets_test.rb
+```
+
+Senza `.env` completo la suite resta verde: i test Google vengono skippati.
+
+## Deploy (Kamal)
+
+Serve un VPS con Docker e SSH, e un dominio che punta al server. Le immagini restano sul registry locale (`localhost:5555`).
+
+1. In `config/deploy.yml` imposta l’IP del server e `proxy.host`.
+2. `set -a && source .env && set +a`
+3. Primo setup: `bundle exec kamal setup`
+4. Deploy successivi: `bundle exec kamal deploy`
+
+`kamal-proxy` ascolta 80/443, certificato Let’s Encrypt, healthcheck `GET /health`.
+
+```bash
+bundle exec kamal logs
+bundle exec kamal shell
 ```

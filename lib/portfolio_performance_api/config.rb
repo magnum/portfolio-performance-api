@@ -20,10 +20,36 @@ module PortfolioPerformanceApi
     end
 
     def drive_file_id
-      raw = env("GOOGLE_DRIVE_FILE_ID")
+      raw = env("PORTFOLIO_GOOGLE_DRIVE_FILE_ID")
       return if raw.nil? || raw.empty?
 
       extract_drive_id(raw)
+    end
+
+    def sync_drive_file_id
+      raw = env("SYNC_GOOGLE_DRIVE_FILE_ID")
+      return if raw.nil? || raw.empty?
+
+      extract_drive_id(raw)
+    end
+
+    def sync_test_drive_file_id
+      raw = env("SYNC_GOOGLE_DRIVE_FILE_ID_TEST")
+      return if raw.nil? || raw.empty?
+
+      extract_drive_id(raw)
+    end
+
+    def sync_skip_rows
+      Integer(env("SYNC_GOOGLE_DRIVE_FILE_SKIP_ROWS", "0"))
+    end
+
+    def sync_rows_chunk
+      Integer(env("SYNC_GOOGLE_DRIVE_ROWS_CHUNK", "100"))
+    end
+
+    def sync_preview_rows
+      Integer(env("SYNC_GOOGLE_DRIVE_PREVIEW_ROWS", "20"))
     end
 
     def service_account_json
