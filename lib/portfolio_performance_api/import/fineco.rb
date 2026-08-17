@@ -12,6 +12,8 @@ require_relative "../row_preview"
 module PortfolioPerformanceApi
   class Import
     class Fineco
+      PREVIEW_ROWS = 10
+
       def initialize(session: Session.new)
         @session = session
       end
@@ -133,8 +135,7 @@ module PortfolioPerformanceApi
           sections << RowPreview::Section.new(
             title: "EXCLUDED",
             lines: excluded_lines,
-            page_size: [excluded_lines.size, 1].max,
-            scroll: false
+            page_size: PREVIEW_ROWS
           )
         end
         existing_lines = Array(existing_rows).map { |row| format_row(row, width: width) }
@@ -142,14 +143,14 @@ module PortfolioPerformanceApi
           sections << RowPreview::Section.new(
             title: "EXISTING",
             lines: existing_lines,
-            page_size: [existing_lines.size, 1].max,
-            scroll: false
+            page_size: PREVIEW_ROWS
           )
         end
         sections << RowPreview::Section.new(
           title: "IMPORT",
           lines: Array(import_rows).map { |row| format_row(row, width: width) },
-          counts: { create: Array(import_rows).size, update: 0 }
+          counts: { create: Array(import_rows).size, update: 0 },
+          page_size: PREVIEW_ROWS
         )
         sections
       end
@@ -187,7 +188,7 @@ module PortfolioPerformanceApi
         RowPreview.new(
           account_name,
           self.class.preview_sections(result.candidates, result.excluded, result.existing, exclude: exclude),
-          page_size: Config.sync_preview_rows,
+          page_size: PREVIEW_ROWS,
           prompt: "[#{account_name}] import (Y)es or Esc/Q to skip?",
           choices: %w[Y]
         ).run

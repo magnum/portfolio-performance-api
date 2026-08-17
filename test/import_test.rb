@@ -230,8 +230,8 @@ class ImportTest < Minitest::Test
     )
 
     assert_equal %w[EXCLUDED IMPORT], sections.map(&:title)
-    assert_equal false, sections[0].scroll
-    assert_equal 1, sections[0].page_size
+    assert_equal 10, sections[0].page_size
+    refute_equal false, sections[0].scroll
     assert_equal 1, sections[0].lines.size
     assert_includes sections[0].lines.first, "Compravendita Divise"
     assert_equal 1, sections[1].counts[:create]
@@ -282,9 +282,65 @@ class ImportTest < Minitest::Test
     )
 
     assert_equal %w[EXCLUDED EXISTING IMPORT], sections.map(&:title)
-    assert_equal false, sections[1].scroll
+    assert_equal 10, sections[1].page_size
+    assert_equal 10, sections[2].page_size
+    refute_equal false, sections[1].scroll
+    refute_equal false, sections[2].scroll
     assert_includes sections[1].lines.first, "Already there"
     assert_includes sections[2].lines.first, "New row"
+  end
+
+  def test_preview_sections_cap_existing_and_import_at_ten
+    excluded = (1..15).map do |index|
+      PortfolioPerformanceApi::FinecoXls::Row.new(
+        date: Date.new(2026, 8, 1),
+        description: "Excluded #{index}",
+        amount_cents: 50,
+        type: :DEPOSIT
+      )
+    end
+    existing = (1..15).map do |index|
+      PortfolioPerformanceApi::FinecoXls::Row.new(
+        date: Date.new(2026, 8, 1),
+        description: "Existing #{index}",
+        amount_cents: 100,
+        type: :DEPOSIT
+      )
+    end
+    imported = (1..15).map do |index|
+      PortfolioPerformanceApi::FinecoXls::Row.new(
+        date: Date.new(2026, 8, 2),
+        description: "Import #{index}",
+        amount_cents: 200,
+        type: :REMOVAL
+      )
+    end
+    sections = PortfolioPerformanceApi::Import::Fineco.preview_sections(
+      imported, excluded, existing, exclude: "excluded", width: 120
+    )
+    excluded_section, existing_section, import_section = sections
+
+    assert_equal 15, excluded_section.lines.size
+    assert_equal 15, existing_section.lines.size
+    assert_equal 15, import_section.lines.size
+    assert_equal [10, 10, 10], sections.map(&:page_size)
+
+    preview = PortfolioPerformanceApi::RowPreview.new(
+      "EUR",
+      sections,
+      page_size: PortfolioPerformanceApi::Import::Fineco::PREVIEW_ROWS,
+      prompt: "import?",
+      choices: %w[Y]
+    )
+    window = preview.instance_variable_get(:@window)
+    assert_equal [10, 10, 10], (0..2).map { |index| window.visible(index).size }
+    assert_includes window.visible(0).first, "Excluded 1"
+    assert_includes window.visible(1).first, "Existing 1"
+    assert_includes window.visible(2).first, "Import 1"
+    window.down
+    assert_includes window.visible(0).first, "Excluded 2"
+    assert_includes window.visible(1).first, "Existing 2"
+    assert_includes window.visible(2).first, "Import 2"
   end
 
   def test_preview_sections_shows_every_excluded_row
@@ -301,8 +357,8 @@ class ImportTest < Minitest::Test
     )
 
     assert_equal 7, sections[0].lines.size
-    assert_equal 7, sections[0].page_size
-    assert_equal false, sections[0].scroll
+    assert_equal 10, sections[0].page_size
+    refute_equal false, sections[0].scroll
     assert(sections[0].lines.all? { |line| line.include?("Cambio valuta") })
   end
 
