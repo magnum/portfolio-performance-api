@@ -15,6 +15,7 @@ module PortfolioPerformanceApi
     SECURITIES_EXTRA_COLUMNS = ["symbol", "isin", "shares", "quote", "fees", "taxes", "net transaction value"].freeze
     DEPOSIT_EXTRA_KEYS = %i[security shares per_share offset_account note source].freeze
     SECURITIES_EXTRA_KEYS = %i[symbol isin shares quote fees taxes net].freeze
+    DERIVED_EXTRA_KEYS = %i[per_share quote net].freeze
     SHARE_SCALE = 100_000_000
     EXTRA_HEADERS = {
       security: [/\Asecurity\z/, /\Atitolo\z/],
@@ -513,10 +514,11 @@ module PortfolioPerformanceApi
     end
 
     def same_proto?(proto, merged)
+      keys = merged.extras.to_h.keys - DERIVED_EXTRA_KEYS
       proto.type == merged.type &&
         proto.uuid.to_s == merged.uuid.to_s &&
         proto.destination.to_s == merged.destination.to_s &&
-        same_extras?(proto.extras, merged.extras, merged.extras.to_h.keys)
+        same_extras?(proto.extras, merged.extras, keys)
     end
 
     def find_transaction(client, vehicle, record, names: {})
@@ -654,12 +656,12 @@ module PortfolioPerformanceApi
     def parse_extra(key, value)
       case key
       when :shares
-        number = parse_extra_number(value)
+        number = parse_decimal(value)
         number && (number * SHARE_SCALE).round
       when :fees, :taxes, :net
         parse_signed_cents(value)&.abs
       when :per_share, :quote
-        parse_extra_number(value)
+        parse_decimal(value)
       else
         value.to_s.strip
       end
@@ -668,6 +670,31 @@ module PortfolioPerformanceApi
     def parse_extra_number(value)
       cents = parse_signed_cents(value)
       cents && cents / 100.0
+    end
+
+    def parse_decimal(value)
+      return if value.nil? || value.to_s.strip.empty?
+      return value.to_f if value.is_a?(Numeric)
+
+      text = value.to_s.strip.gsub(/[\u20ac$\u00a3\s]/, "")
+      last_comma = text.rindex(",")
+      last_dot = text.rindex(".")
+      text = if last_comma && last_dot
+        if last_comma > last_dot
+          text.delete(".").tr(",", ".")
+        else
+          text.delete(",")
+        end
+      elsif text.count(",") > 1
+        text.delete(",")
+      elsif text.include?(",")
+        text.tr(",", ".")
+      else
+        text
+      end
+      Float(text)
+    rescue ArgumentError
+      nil
     end
 
     def per_share_value(amount_cents, shares)
@@ -739,7 +766,9 @@ module PortfolioPerformanceApi
       return true unless extra_present?(left) || extra_present?(right)
       return false unless extra_present?(left) && extra_present?(right)
 
-      left.to_f.round(6) == right.to_f.round(6)
+      l = left.to_f
+      r = right.to_f
+      (l - r).abs <= [l.abs, r.abs, 1.0].max * 1e-9
     end
 
     def extra_present?(value)
@@ -840,7 +869,7 @@ module PortfolioPerformanceApi
                          :destination_name, :security_name, :destination_column, :assign_counterpart!,
                          :lookup_name, :take_sheet_row!, :pick_destination, :securities_by_uuid,
                          :extra_columns, :extras_from_proto, :extras_from_sheet, :parse_extra,
-                         :parse_extra_number, :per_share_value, :unit_cents, :security_attr,
+                         :parse_extra_number, :parse_decimal, :per_share_value, :unit_cents, :security_attr,
                          :merge_extras, :same_extras?, :extra_equal?, :extra_present?, :extra_cell,
                          :format_extra, :write_cell, :apply_extras!, :lookup_security, :apply_units!,
                          :ensure_headers, :extra_header_present?, :extra_key_for_label
