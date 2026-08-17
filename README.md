@@ -140,7 +140,7 @@ Keys: ↑/↓ one row, `u`/`v` page, **S** spreadsheet only, **P** portfolio onl
 
 `bin/sync cleanup` clears one sheet at a time (rows above the header and the header stay). Confirm with `y` / `n` / `a` (all remaining sheets), **Esc** = no.
 
-Columns: `date`, `type`, `amount`, `currency`, `description`, `destination`, `uuid`. `SYNC_GOOGLE_DRIVE_FILE_SKIP_ROWS` leaves the first N rows untouched.
+Columns: `date`, `type`, `amount`, `currency`, `description`, `destination`, `uuid`. Sync also writes extra columns (added if missing) that are never used for the identity hash: deposit sheets get `security`, `shares`, `per share`, `offset account`, `note`, `source`; securities sheets get `symbol`, `isin`, `shares`, `quote`, `fees`, `taxes`, `net transaction value`. Empty extra cells are filled from the portfolio; a non-empty sheet cell wins. Securities are looked up (ISIN, then symbol, then name) and never created. `SYNC_GOOGLE_DRIVE_FILE_SKIP_ROWS` leaves the first N rows untouched.
 
 Sheet tabs are named `deposit - {account}` and `securities - {account}` so a cash account and a securities account can share the same Portfolio Performance name.
 

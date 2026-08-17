@@ -79,9 +79,11 @@ module PortfolioPerformanceApi
       chunks = TransactionSync.sheet_chunks(grid, start_row: start_row, chunk_size: chunk_size)
       return if chunks.empty?
 
-      ensure_row_count(title, chunks.last[:end_row])
+      columns = [Array(grid).map { |row| Array(row).size }.max.to_i, 1].max
+      last_col = self.class.column_letter(columns)
+      ensure_grid(title, rows: chunks.last[:end_row], columns: columns)
       chunks.each do |chunk|
-        write_range(title, "A#{chunk[:start_row]}:G#{chunk[:end_row]}", chunk[:values])
+        write_range(title, "A#{chunk[:start_row]}:#{last_col}#{chunk[:end_row]}", chunk[:values])
       end
     end
 
@@ -167,6 +169,18 @@ module PortfolioPerformanceApi
       end
     end
 
+    def self.column_letter(index)
+      number = Integer(index)
+      return "A" if number < 1
+
+      letters = +""
+      while number.positive?
+        number, remainder = (number - 1).divmod(26)
+        letters = ("A".ord + remainder).chr + letters
+      end
+      letters
+    end
+
     def self.kind_and_name(vehicle)
       if vehicle.respond_to?(:kind) && vehicle.respond_to?(:name)
         [vehicle.kind, vehicle.name]
@@ -178,13 +192,25 @@ module PortfolioPerformanceApi
 
     private
 
-    def ensure_row_count(title, rows)
+    def ensure_grid(title, rows:, columns:)
       props = sheet_properties.find { |item| item["title"] == title }
       return unless props
 
-      current = Integer(props.dig("gridProperties", "rowCount") || 0)
-      needed = Integer(rows)
-      return if needed <= current
+      current_rows = Integer(props.dig("gridProperties", "rowCount") || 0)
+      current_cols = Integer(props.dig("gridProperties", "columnCount") || 0)
+      needed_rows = Integer(rows)
+      needed_cols = Integer(columns)
+      updates = {}
+      fields = []
+      if needed_rows > current_rows
+        updates[:rowCount] = needed_rows
+        fields << "gridProperties.rowCount"
+      end
+      if needed_cols > current_cols
+        updates[:columnCount] = needed_cols
+        fields << "gridProperties.columnCount"
+      end
+      return if fields.empty?
 
       batch_update(
         [
@@ -192,9 +218,9 @@ module PortfolioPerformanceApi
             updateSheetProperties: {
               properties: {
                 sheetId: props["sheetId"],
-                gridProperties: { rowCount: needed }
+                gridProperties: updates
               },
-              fields: "gridProperties.rowCount"
+              fields: fields.join(",")
             }
           }
         ]

@@ -78,7 +78,7 @@ class SyncDemoTest < Minitest::Test
     sheet_plan, = PortfolioPerformanceApi::TransactionSync.split_plan(plan)
 
     created, updated = PortfolioPerformanceApi::TransactionSync.apply_sheet(
-      sheets, title, sheet_plan, skip_rows: 0, chunk_size: 100, raw_rows: []
+      sheets, title, sheet_plan, skip_rows: 0, chunk_size: 100, raw_rows: [], kind: vehicle.kind
     )
     second = PortfolioPerformanceApi::TransactionSync.account_plan(
       @client, vehicle, sheets.read_rows(title), names: @names
@@ -98,7 +98,7 @@ class SyncDemoTest < Minitest::Test
   def test_sheet_only_row_creates_portfolio_transaction
     vehicle = vehicle_named("Call Money Account")
     plan = PortfolioPerformanceApi::TransactionSync.account_plan(@client, vehicle, [], names: @names)
-    grid = PortfolioPerformanceApi::TransactionSync.materialize_sheet([], plan, skip_rows: 0)
+    grid = PortfolioPerformanceApi::TransactionSync.materialize_sheet([], plan, skip_rows: 0, kind: vehicle.kind)
     grid << ["2026-08-15", "REMOVAL", -12.5, "EUR", "Test fee", "", ""]
     second = PortfolioPerformanceApi::TransactionSync.account_plan(
       @client, vehicle, grid, names: @names
@@ -127,10 +127,10 @@ class SyncDemoTest < Minitest::Test
     plan = PortfolioPerformanceApi::TransactionSync.account_plan(
       @client, vehicle, raw, names: @names, skip_rows: 1
     )
-    grid = PortfolioPerformanceApi::TransactionSync.materialize_sheet(raw, plan, skip_rows: 1)
+    grid = PortfolioPerformanceApi::TransactionSync.materialize_sheet(raw, plan, skip_rows: 1, kind: vehicle.kind)
 
     assert_equal ["keep me"], grid[0]
-    assert_equal PortfolioPerformanceApi::TransactionSync::HEADERS, grid[1]
+    assert_equal PortfolioPerformanceApi::TransactionSync.headers_for(vehicle.kind), grid[1]
     assert_equal "2019-04-01", grid[2][0]
     assert_in_delta 500.0, grid[2][2]
   end
@@ -142,7 +142,7 @@ class SyncDemoTest < Minitest::Test
     sheet_plan, = PortfolioPerformanceApi::TransactionSync.split_plan(plan)
 
     PortfolioPerformanceApi::TransactionSync.apply_sheet(
-      sheets, "Cryptocurrency", sheet_plan, skip_rows: 0, chunk_size: 3, raw_rows: []
+      sheets, "Cryptocurrency", sheet_plan, skip_rows: 0, chunk_size: 3, raw_rows: [], kind: vehicle.kind
     )
 
     # header + 7 txs = 8 rows, chunk 3 → 3 writes

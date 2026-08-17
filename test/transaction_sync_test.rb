@@ -325,6 +325,11 @@ class TransactionSyncTest < Minitest::Test
   end
 
   def test_sanitize_sheet_title
+    assert_equal "A", PortfolioPerformanceApi::SheetsClient.column_letter(1)
+    assert_equal "G", PortfolioPerformanceApi::SheetsClient.column_letter(7)
+    assert_equal "N", PortfolioPerformanceApi::SheetsClient.column_letter(14)
+    assert_equal "Z", PortfolioPerformanceApi::SheetsClient.column_letter(26)
+    assert_equal "AA", PortfolioPerformanceApi::SheetsClient.column_letter(27)
     assert_equal "EUR010069756", PortfolioPerformanceApi::SheetsClient.sanitize_title("EUR010069756")
     assert_equal "Conto-titoli", PortfolioPerformanceApi::SheetsClient.sanitize_title("Conto/titoli")
     assert_equal "Account", PortfolioPerformanceApi::SheetsClient.sanitize_title("   ")
@@ -406,13 +411,13 @@ class TransactionSyncTest < Minitest::Test
       create_portfolio: [],
       update_portfolio: []
     )
-    grid = PortfolioPerformanceApi::TransactionSync.materialize_sheet(raw, plan, skip_rows: 1)
+    grid = PortfolioPerformanceApi::TransactionSync.materialize_sheet(raw, plan, skip_rows: 1, kind: :deposit)
 
     assert_equal ["keep"], grid[0]
-    assert_equal PortfolioPerformanceApi::TransactionSync::HEADERS, grid[1]
-    assert_equal ["2026-08-12", "FEE", -83.13, "EUR", "Iper", "", "p2"], grid[2]
-    assert_equal ["2026-08-13", "DEPOSIT", 10.0, "EUR", "Old", "", "keep"], grid[3]
-    assert_equal ["2026-08-15", "REMOVAL", -99.0, "EUR", "VISA", "", "p3"], grid[4]
+    assert_equal PortfolioPerformanceApi::TransactionSync.headers_for(:deposit), grid[1]
+    assert_equal ["2026-08-12", "FEE", -83.13, "EUR", "Iper", "", "p2"], grid[2][0, 7]
+    assert_equal ["2026-08-13", "DEPOSIT", 10.0, "EUR", "Old", "", "keep"], grid[3][0, 7]
+    assert_equal ["2026-08-15", "REMOVAL", -99.0, "EUR", "VISA", "", "p3"], grid[4][0, 7]
   end
 
   def test_sheet_chunks_split_from_start_row
@@ -435,7 +440,7 @@ class TransactionSyncTest < Minitest::Test
     )
 
     created, updated = PortfolioPerformanceApi::TransactionSync.apply_sheet(
-      sheets, "EUR", plan, skip_rows: 0, chunk_size: 2, raw_rows: []
+      sheets, "EUR", plan, skip_rows: 0, chunk_size: 2, raw_rows: [], kind: :deposit
     )
 
     assert_equal 2, created
@@ -463,6 +468,187 @@ class TransactionSyncTest < Minitest::Test
     body = JSON.parse(expand[:body])
     assert_equal 2001, body.dig("requests", 0, "updateSheetProperties", "properties", "gridProperties", "rowCount")
     assert session.calls.count { |call| call[:method] == :put } >= 2
+  end
+
+  def test_extra_columns_are_not_part_of_identity
+    header = %w[date type amount currency description destination uuid security shares source]
+    mapping = PortfolioPerformanceApi::TransactionSync.column_mapping(header)
+    first = PortfolioPerformanceApi::TransactionSync.from_sheet_row(
+      ["2026-08-15", "REMOVAL", "-99.00", "EUR", "VISA", "", "", "VWCE", "10", "import"],
+      "EUR",
+      currency: "EUR",
+      mapping: mapping
+    )
+    second = PortfolioPerformanceApi::TransactionSync.from_sheet_row(
+      ["2026-08-15", "REMOVAL", "-99.00", "EUR", "VISA", "", "", "AMZN", "2", "other"],
+      "EUR",
+      currency: "EUR",
+      mapping: mapping
+    )
+
+    assert_equal first.id, second.id
+    assert_equal first.id, PortfolioPerformanceApi::TransactionSync.identity_id("EUR", first.date, -9_900, "VISA")
+    assert_equal "VWCE", first.extras[:security]
+    assert_equal 1_000_000_000, first.extras[:shares]
+    assert_equal "import", first.extras[:source]
+  end
+
+  def test_deposit_extras_fill_sheet_and_sheet_wins_on_portfolio
+    client = protobuf_client
+    client.securities.first.isin = "IE00BK5BQT80"
+    client.securities.first.tickerSymbol = "VWCE"
+    account = client.accounts.find { |item| item.uuid == "acc-cash" }
+    stamp = Google::Protobuf::Timestamp.new(seconds: Time.utc(2026, 8, 15).to_i)
+    tx = PortfolioPerformanceApi::Proto::PTransaction.new(
+      uuid: "u-extra",
+      type: :DEPOSIT,
+      account: "acc-cash",
+      date: stamp,
+      currencyCode: "EUR",
+      amount: 100_000,
+      shares: 1_000_000_000,
+      note: "Buy VWCE",
+      security: "sec-etf",
+      source: "ppapi import 20260815T120000"
+    )
+    client.transactions << tx
+    header = %w[date type amount currency description destination uuid security shares per\ share offset\ account note source]
+    raw = [
+      header,
+      ["2026-08-15", "DEPOSIT", 1000.0, "EUR", "Buy VWCE", "", "u-extra", "", "", "", "Risparmio", "", ""]
+    ]
+    vehicle = PortfolioPerformanceApi::TransactionSync.vehicles(client).find { |item| item.name == "Conto corrente" }
+    plan = PortfolioPerformanceApi::TransactionSync.account_plan(client, vehicle, raw)
+    grid = PortfolioPerformanceApi::TransactionSync.materialize_sheet(raw, plan, kind: :deposit)
+
+    assert_equal header, grid[0]
+    filled = grid[1]
+    assert_equal "VWCE", filled[7]
+    assert_in_delta 10.0, filled[8]
+    assert_in_delta 100.0, filled[9]
+    assert_equal "Risparmio", filled[10]
+    assert_equal "Buy VWCE", filled[11]
+    assert_equal "ppapi import 20260815T120000", filled[12]
+    assert_includes plan.update_sheet.map(&:uuid), "u-extra"
+    assert_equal "Risparmio", plan.update_portfolio.first.destination
+  end
+
+  def test_securities_extras_round_trip_and_apply
+    client = protobuf_client
+    client.securities.first.isin = "IE00BK5BQT80"
+    client.securities.first.tickerSymbol = "VWCE"
+    stamp = Google::Protobuf::Timestamp.new(seconds: Time.utc(2026, 8, 13).to_i)
+    buy = client.transactions.find { |tx| tx.uuid == "tx-buy" }
+    buy.date = stamp
+    buy.account = "acc-cash"
+    buy.units << PortfolioPerformanceApi::Proto::PTransactionUnit.new(
+      type: :FEE, amount: 150, currencyCode: "EUR"
+    )
+    buy.units << PortfolioPerformanceApi::Proto::PTransactionUnit.new(
+      type: :TAX, amount: 50, currencyCode: "EUR"
+    )
+    header = %w[date type amount currency description destination uuid symbol isin shares quote fees taxes net\ transaction\ value]
+    raw = [header]
+    vehicle = PortfolioPerformanceApi::TransactionSync.vehicles(client).find { |item| item.kind == :securities }
+    plan = PortfolioPerformanceApi::TransactionSync.account_plan(client, vehicle, raw)
+    grid = PortfolioPerformanceApi::TransactionSync.materialize_sheet(raw, plan, kind: :securities)
+    created = grid[1]
+
+    assert_equal header, grid[0]
+    assert_equal "VWCE", created[7]
+    assert_equal "IE00BK5BQT80", created[8]
+    assert_in_delta 1.0, created[9]
+    assert_in_delta 1000.0, created[10]
+    assert_in_delta 1.5, created[11]
+    assert_in_delta 0.5, created[12]
+    assert_in_delta 1000.0, created[13]
+
+    sheet_row = created.dup
+    sheet_row[11] = 2.0
+    sheet_row[12] = 1.0
+    second = PortfolioPerformanceApi::TransactionSync.account_plan(client, vehicle, [header, sheet_row])
+    assert_equal [2_00], second.update_portfolio.map { |record| record.extras[:fees] }
+    assert_equal [1_00], second.update_portfolio.map { |record| record.extras[:taxes] }
+
+    PortfolioPerformanceApi::TransactionSync.apply_portfolio!(client, vehicle, second.update_portfolio)
+    assert_equal 200, buy.units.find { |unit| unit.type == :FEE }.amount
+    assert_equal 100, buy.units.find { |unit| unit.type == :TAX }.amount
+  end
+
+  def test_apply_creates_deposit_with_security_shares_and_source
+    client = protobuf_client
+    cash = PortfolioPerformanceApi::TransactionSync.vehicles(client).find { |item| item.name == "Conto corrente" }
+    created = record(
+      "Conto corrente", Date.new(2026, 8, 15), -99_000, "Titoli VWCE", "PURCHASE", nil, nil, "Deposito titoli",
+      extras: { security: "VWCE", shares: 500_000_000, source: "sheet", note: "custom note" }
+    )
+
+    PortfolioPerformanceApi::TransactionSync.apply_portfolio!(client, cash, [created])
+    imported = client.transactions.last
+    assert_equal :PURCHASE, imported.type
+    assert_equal "sec-etf", imported.security
+    assert_equal 500_000_000, imported.shares
+    assert_equal "sheet", imported.source
+    assert_equal "custom note", imported.note
+    assert_equal "port-titoli", imported.portfolio
+  end
+
+  def test_materialize_keeps_unknown_columns
+    raw = [
+      %w[date type amount currency description destination uuid memo security],
+      ["2026-08-12", "REMOVAL", -83.13, "EUR", "Iper", "", "p2", "keep", ""]
+    ]
+    date = Date.new(2026, 8, 12)
+    proto = record("EUR", date, -8_313, "Iper", "REMOVAL", "p2", 2, "", extras: { security: "VWCE" })
+    plan = PortfolioPerformanceApi::TransactionSync::Plan.new(
+      create_sheet: [],
+      update_sheet: [proto],
+      create_portfolio: [],
+      update_portfolio: []
+    )
+    grid = PortfolioPerformanceApi::TransactionSync.materialize_sheet(raw, plan, kind: :deposit)
+
+    assert_equal(
+      %w[date type amount currency description destination uuid memo security] +
+        ["shares", "per share", "offset account", "note", "source"],
+      grid[0]
+    )
+    assert_equal "keep", grid[1][7]
+    assert_equal "VWCE", grid[1][8]
+  end
+
+  def test_adds_missing_extra_columns_from_portfolio
+    client = protobuf_client
+    stamp = Google::Protobuf::Timestamp.new(seconds: Time.utc(2026, 8, 15).to_i)
+    tx = PortfolioPerformanceApi::Proto::PTransaction.new(
+      uuid: "u-cols",
+      type: :DEPOSIT,
+      account: "acc-cash",
+      date: stamp,
+      currencyCode: "EUR",
+      amount: 100_000,
+      shares: 1_000_000_000,
+      note: "Buy VWCE",
+      security: "sec-etf",
+      source: "ppapi import"
+    )
+    client.transactions << tx
+    raw = [
+      %w[date type amount currency description destination uuid],
+      ["2026-08-15", "DEPOSIT", 1000.0, "EUR", "Buy VWCE", "", "u-cols"]
+    ]
+    vehicle = PortfolioPerformanceApi::TransactionSync.vehicles(client).find { |item| item.name == "Conto corrente" }
+    plan = PortfolioPerformanceApi::TransactionSync.account_plan(client, vehicle, raw)
+    grid = PortfolioPerformanceApi::TransactionSync.materialize_sheet(raw, plan, kind: :deposit)
+
+    assert_equal PortfolioPerformanceApi::TransactionSync.headers_for(:deposit), grid[0]
+    assert_includes plan.update_sheet.map(&:uuid), "u-cols"
+    assert_equal "VWCE", grid[1][7]
+    assert_in_delta 10.0, grid[1][8]
+    assert_in_delta 100.0, grid[1][9]
+    assert_equal "Buy VWCE", grid[1][11]
+    assert_equal "ppapi import", grid[1][12]
+    assert_equal grid[1][0, 7], raw[1]
   end
 
   def test_reads_legacy_id_column_without_using_it
@@ -527,7 +713,7 @@ class TransactionSyncTest < Minitest::Test
     end
   end
 
-  def record(account_name, date, signed_cents, description, type, uuid = nil, row_number = nil, destination = "")
+  def record(account_name, date, signed_cents, description, type, uuid = nil, row_number = nil, destination = "", extras: nil)
     PortfolioPerformanceApi::TransactionSync::Record.new(
       id: PortfolioPerformanceApi::TransactionSync.identity_id(account_name, date, signed_cents, description, destination),
       account_name: account_name,
@@ -538,7 +724,8 @@ class TransactionSyncTest < Minitest::Test
       description: description,
       destination: destination,
       uuid: uuid,
-      row_number: row_number
+      row_number: row_number,
+      extras: extras
     )
   end
 end

@@ -73,7 +73,8 @@ module PortfolioPerformanceApi
               known_sheets << title
             end
             TransactionSync.apply_sheet(
-              sheets, title, sheet_plan, skip_rows: skip_rows, chunk_size: chunk_size, raw_rows: raw_rows
+              sheets, title, sheet_plan,
+              skip_rows: skip_rows, chunk_size: chunk_size, raw_rows: raw_rows, kind: vehicle.kind
             )
             puts "#{vehicle.name}: spreadsheet written"
           end

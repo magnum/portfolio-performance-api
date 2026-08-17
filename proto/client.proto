@@ -23,6 +23,8 @@ message PSecurity {
   string uuid = 1;
   string name = 3;
   optional string currencyCode = 4;
+  optional string isin = 7;
+  optional string tickerSymbol = 8;
   repeated PHistoricalPrice prices = 13;
   optional PFullHistoricalPrice latest = 16;
   bool isRetired = 20;

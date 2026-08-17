@@ -5,11 +5,31 @@ require "digest"
 require "securerandom"
 require "time"
 
+require_relative "proto/client_pb"
 require_relative "transaction_identity"
 
 module PortfolioPerformanceApi
   module TransactionSync
     HEADERS = %w[date type amount currency description destination uuid].freeze
+    DEPOSIT_EXTRA_COLUMNS = ["security", "shares", "per share", "offset account", "note", "source"].freeze
+    SECURITIES_EXTRA_COLUMNS = ["symbol", "isin", "shares", "quote", "fees", "taxes", "net transaction value"].freeze
+    DEPOSIT_EXTRA_KEYS = %i[security shares per_share offset_account note source].freeze
+    SECURITIES_EXTRA_KEYS = %i[symbol isin shares quote fees taxes net].freeze
+    SHARE_SCALE = 100_000_000
+    EXTRA_HEADERS = {
+      security: [/\Asecurity\z/, /\Atitolo\z/],
+      shares: [/\Ashares\z/],
+      per_share: [/per[_\s-]*share/],
+      offset_account: [/offset[_\s-]*account/],
+      note: [/\Anote\z/],
+      source: [/\Asource\z/],
+      symbol: [/\Asymbol\z/, /\Aticker\z/],
+      isin: [/\Aisin\z/],
+      quote: [/\Aquote\z/],
+      fees: [/\Afees?\z/],
+      taxes: [/\Ataxes?\z/],
+      net: [/net[_\s-]*(transaction[_\s-]*)?value/]
+    }.freeze
     OUTFLOW_TYPES = %w[
       PURCHASE SALE OUTBOUND_DELIVERY REMOVAL INTEREST_CHARGE TAX FEE
     ].freeze
@@ -36,6 +56,7 @@ module PortfolioPerformanceApi
     Vehicle = Struct.new(:kind, :name, :uuid, :currency, keyword_init: true)
     Record = Struct.new(
       :id, :account_name, :date, :type, :signed_cents, :currency, :description, :destination, :uuid, :row_number,
+      :extras,
       keyword_init: true
     )
     Plan = Struct.new(:create_sheet, :create_portfolio, :update_sheet, :update_portfolio, keyword_init: true)
@@ -106,7 +127,7 @@ module PortfolioPerformanceApi
       index[text] || index[text.downcase]
     end
 
-    def from_proto(tx, vehicle, names: {}, security_names: {})
+    def from_proto(tx, vehicle, names: {}, security_names: {}, securities: {})
       vehicle = wrap_vehicle(vehicle)
       return unless belongs?(tx, vehicle)
       return unless tx.has_date?
@@ -125,13 +146,26 @@ module PortfolioPerformanceApi
         currency: tx.currencyCode.to_s.empty? ? vehicle.currency : tx.currencyCode,
         description: description,
         destination: destination,
-        uuid: tx.uuid
+        uuid: tx.uuid,
+        extras: extras_from_proto(tx, destination, security_names, securities)
       )
     end
 
-    def parse_sheet(raw_rows, account_name, currency:, skip_rows: 0)
+    def extra_columns_for(kind)
+      kind.to_s == "securities" ? SECURITIES_EXTRA_COLUMNS : DEPOSIT_EXTRA_COLUMNS
+    end
+
+    def extra_keys_for(kind)
+      kind.to_s == "securities" ? SECURITIES_EXTRA_KEYS : DEPOSIT_EXTRA_KEYS
+    end
+
+    def headers_for(kind)
+      HEADERS + extra_columns_for(kind)
+    end
+
+    def parse_sheet(raw_rows, account_name, currency:, skip_rows: 0, kind: :deposit)
       rows = Array(raw_rows)
-      mapping = column_mapping(rows[skip_rows])
+      mapping = column_mapping(ensure_headers(rows[skip_rows], kind))
       rows.each_with_index.filter_map do |row, index|
         next if index < skip_rows
         next if header_row?(row)
@@ -156,7 +190,9 @@ module PortfolioPerformanceApi
       type = normalize_type(cells[mapping[:type]], amount)
       return if type.nil?
 
+      extras = extras_from_sheet(cells, mapping)
       destination = mapping[:destination] ? cells[mapping[:destination]].to_s.strip : ""
+      destination = extras[:offset_account].to_s.strip if destination.empty?
       cents = signed_cents(type, amount)
       uuid = cells[mapping[:uuid]].to_s.strip
       currency_cell = cells[mapping[:currency]].to_s.strip
@@ -169,7 +205,8 @@ module PortfolioPerformanceApi
         currency: currency_cell.empty? ? currency : currency_cell,
         description: description,
         destination: destination,
-        uuid: uuid.empty? ? nil : uuid
+        uuid: uuid.empty? ? nil : uuid,
+        extras: extras
       )
     end
 
@@ -187,25 +224,32 @@ module PortfolioPerformanceApi
       remaining.delete_at(index) if index
     end
 
-    def to_sheet_row(record)
-      [
-        record.date.strftime("%Y-%m-%d"),
-        record.type,
-        (record.signed_cents / 100.0).round(2),
-        record.currency,
-        record.description,
-        record.destination.to_s,
-        record.uuid.to_s
-      ]
+    def to_sheet_row(record, header: nil, existing: nil)
+      mapping = header ? column_mapping(header) : DEFAULT_COLUMNS.merge(extras: {})
+      cells = existing ? Array(existing).dup : []
+      write_cell(cells, mapping[:date], record.date.strftime("%Y-%m-%d"))
+      write_cell(cells, mapping[:type], record.type)
+      write_cell(cells, mapping[:amount], (record.signed_cents / 100.0).round(2))
+      write_cell(cells, mapping[:currency], record.currency)
+      write_cell(cells, mapping[:description], record.description)
+      write_cell(cells, mapping[:destination], record.destination.to_s)
+      write_cell(cells, mapping[:uuid], record.uuid.to_s)
+      mapping.fetch(:extras, {}).each do |key, index|
+        write_cell(cells, index, extra_cell(key, record))
+      end
+      cells
     end
 
     def account_plan(client, vehicle, raw_rows, names: uuid_names(client), skip_rows: 0)
       secs = security_names(client)
+      securities = securities_by_uuid(client)
       portfolio_records = client.transactions.filter_map do |tx|
-        from_proto(tx, vehicle, names: names, security_names: secs)
+        from_proto(tx, vehicle, names: names, security_names: secs, securities: securities)
       end
-      sheet_records = parse_sheet(raw_rows, vehicle.name, currency: vehicle.currency, skip_rows: skip_rows)
-      plan(portfolio_records, sheet_records, names_index: name_index(client))
+      sheet_records = parse_sheet(
+        raw_rows, vehicle.name, currency: vehicle.currency, skip_rows: skip_rows, kind: vehicle.kind
+      )
+      plan(portfolio_records, sheet_records, names_index: name_index(client), extra_keys: extra_keys_for(vehicle.kind))
     end
 
     def split_plan(plan)
@@ -225,7 +269,7 @@ module PortfolioPerformanceApi
       ]
     end
 
-    def plan(portfolio_records, sheet_records, names_index: {})
+    def plan(portfolio_records, sheet_records, names_index: {}, extra_keys: [])
       create_sheet = []
       create_portfolio = []
       update_sheet = []
@@ -237,7 +281,7 @@ module PortfolioPerformanceApi
         if row.nil?
           create_sheet << proto
         else
-          merged = merge(proto, row, names_index)
+          merged = merge(proto, row, names_index, extra_keys: extra_keys)
           unless same_row?(row, merged)
             merged.row_number = row.row_number
             update_sheet << merged
@@ -261,37 +305,40 @@ module PortfolioPerformanceApi
       records.each do |record|
         existing = find_transaction(client, vehicle, record, names: uuid_names(client))
         if existing
-          changed += 1 if update_transaction!(existing, record, vehicle, names)
+          changed += 1 if update_transaction!(existing, record, vehicle, names, client)
         else
-          client.transactions << build_transaction(vehicle, record, names)
+          client.transactions << build_transaction(vehicle, record, names, client)
           changed += 1
         end
       end
       changed
     end
 
-    def apply_sheet(sheets, title, plan, skip_rows: 0, chunk_size: 100, raw_rows: nil)
-      grid = materialize_sheet(raw_rows || sheets.read_rows(title), plan, skip_rows: skip_rows)
+    def apply_sheet(sheets, title, plan, skip_rows: 0, chunk_size: 100, raw_rows: nil, kind: :deposit)
+      grid = materialize_sheet(
+        raw_rows || sheets.read_rows(title), plan, skip_rows: skip_rows, kind: kind
+      )
       return [plan.create_sheet.size, plan.update_sheet.size] if grid.size <= skip_rows
 
       sheets.write_chunks(title, grid, start_row: skip_rows + 1, chunk_size: chunk_size)
       [plan.create_sheet.size, plan.update_sheet.size]
     end
 
-    def materialize_sheet(raw_rows, plan, skip_rows: 0)
+    def materialize_sheet(raw_rows, plan, skip_rows: 0, kind: :deposit)
       source = Array(raw_rows)
       grid = Array.new([source.size, skip_rows + 1].max) { |index| Array(source[index]).dup }
-      grid[skip_rows] = HEADERS.dup
+      grid[skip_rows] = ensure_headers(grid[skip_rows], kind)
+      header = grid[skip_rows]
 
       Array(plan.update_sheet).each do |record|
         index = record.row_number.to_i - 1
         next if index.negative?
 
         grid << [] while grid.size <= index
-        grid[index] = to_sheet_row(record)
+        grid[index] = to_sheet_row(record, header: header, existing: grid[index])
       end
       Array(plan.create_sheet).each do |record|
-        grid << to_sheet_row(record)
+        grid << to_sheet_row(record, header: header)
       end
       grid
     end
@@ -309,7 +356,7 @@ module PortfolioPerformanceApi
 
     def column_mapping(header)
       labels = Array(header).map { |cell| cell.to_s.strip.downcase }
-      return DEFAULT_COLUMNS unless header_row?(labels)
+      return DEFAULT_COLUMNS.merge(extras: {}) unless header_row?(labels)
 
       {
         date: labels.index("date") || DEFAULT_COLUMNS[:date],
@@ -318,7 +365,8 @@ module PortfolioPerformanceApi
         currency: labels.index("currency") || DEFAULT_COLUMNS[:currency],
         description: labels.index("description") || DEFAULT_COLUMNS[:description],
         destination: destination_column(labels),
-        uuid: labels.index("uuid") || DEFAULT_COLUMNS[:uuid]
+        uuid: labels.index("uuid") || DEFAULT_COLUMNS[:uuid],
+        extras: extra_columns(labels)
       }
     end
 
@@ -416,10 +464,12 @@ module PortfolioPerformanceApi
     end
 
     def destination_column(labels)
-      labels.index { |label| label.match?(/destination|destinat|offset|other/) }
+      labels.index("destination") ||
+        labels.index { |label| label.match?(/destinat|offset|other/) }
     end
 
-    def merge(proto, row, names_index = {})
+    def merge(proto, row, names_index = {}, extra_keys: [])
+      destination = pick_destination(proto, row, names_index)
       Record.new(
         id: proto.id,
         account_name: proto.account_name,
@@ -428,9 +478,10 @@ module PortfolioPerformanceApi
         signed_cents: proto.signed_cents,
         currency: proto.currency,
         description: proto.description,
-        destination: pick_destination(proto, row, names_index),
+        destination: destination,
         uuid: proto.uuid.to_s.empty? ? row.uuid : proto.uuid,
-        row_number: row.row_number
+        row_number: row.row_number,
+        extras: merge_extras(proto, row, destination, extra_keys)
       )
     end
 
@@ -457,13 +508,15 @@ module PortfolioPerformanceApi
         row.description == merged.description &&
         row.destination.to_s == merged.destination.to_s &&
         row.signed_cents == merged.signed_cents &&
-        row.date == merged.date
+        row.date == merged.date &&
+        same_extras?(row.extras, merged.extras, merged.extras.to_h.keys)
     end
 
     def same_proto?(proto, merged)
       proto.type == merged.type &&
         proto.uuid.to_s == merged.uuid.to_s &&
-        proto.destination.to_s == merged.destination.to_s
+        proto.destination.to_s == merged.destination.to_s &&
+        same_extras?(proto.extras, merged.extras, merged.extras.to_h.keys)
     end
 
     def find_transaction(client, vehicle, record, names: {})
@@ -473,12 +526,17 @@ module PortfolioPerformanceApi
       end
 
       client.transactions.find do |tx|
-        mapped = from_proto(tx, vehicle, names: names, security_names: security_names(client))
+        mapped = from_proto(
+          tx, vehicle,
+          names: names,
+          security_names: security_names(client),
+          securities: securities_by_uuid(client)
+        )
         mapped && mapped.id == record.id
       end
     end
 
-    def update_transaction!(tx, record, vehicle, names)
+    def update_transaction!(tx, record, vehicle, names, client = nil)
       changed = false
       if tx.type.to_s != record.type
         tx.type = record.type
@@ -493,28 +551,34 @@ module PortfolioPerformanceApi
         tx.uuid = record.uuid
         changed = true
       end
-      changed || assign_counterpart!(tx, vehicle, record, names)
+      counterpart = assign_counterpart!(tx, vehicle, record, names)
+      extras = apply_extras!(tx, record, client)
+      changed || counterpart || extras
     end
 
-    def build_transaction(vehicle, record, names)
+    def build_transaction(vehicle, record, names, client = nil)
       now = Time.now.utc
       date = Time.utc(record.date.year, record.date.month, record.date.day)
+      extras = record.extras.to_h
+      note = extra_present?(extras[:note]) ? extras[:note].to_s : record.description
       tx = Proto::PTransaction.new(
         uuid: record.uuid.to_s.empty? ? SecureRandom.uuid : record.uuid,
         type: record.type,
         date: Google::Protobuf::Timestamp.new(seconds: date.to_i),
         currencyCode: record.currency.to_s.empty? ? vehicle.currency : record.currency,
         amount: record.signed_cents.abs,
-        shares: 0,
-        note: record.description,
+        shares: extras[:shares].to_i,
+        note: note,
         updatedAt: Google::Protobuf::Timestamp.new(seconds: now.to_i, nanos: now.nsec)
       )
+      tx.source = extras[:source].to_s if extra_present?(extras[:source])
       if vehicle.kind == :securities
         tx.portfolio = vehicle.uuid
       else
         tx.account = vehicle.uuid
       end
       assign_counterpart!(tx, vehicle, record, names)
+      apply_extras!(tx, record, client)
       tx
     end
 
@@ -537,9 +601,248 @@ module PortfolioPerformanceApi
                tx.has_portfolio? && tx.portfolio, tx.has_otherPortfolio? && tx.otherPortfolio]
       before != after
     end
+
+    def securities_by_uuid(client)
+      Array(client.securities).to_h { |security| [security.uuid, security] }
+    end
+
+    def extra_columns(labels)
+      used = [
+        labels.index("date"),
+        labels.index("type"),
+        labels.index("amount"),
+        labels.index("currency"),
+        labels.index("description"),
+        destination_column(labels),
+        labels.index("uuid")
+      ].compact
+      EXTRA_HEADERS.each_with_object({}) do |(key, patterns), extras|
+        index = labels.index { |label| patterns.any? { |pattern| label.match?(pattern) } }
+        next if index.nil? || used.include?(index)
+
+        extras[key] = index
+      end
+    end
+
+    def extras_from_proto(tx, destination, security_names, securities)
+      security = tx.respond_to?(:has_security?) && tx.has_security? ? securities[tx.security] : nil
+      shares = tx.respond_to?(:has_shares?) && tx.has_shares? ? tx.shares.to_i : 0
+      amount = tx.amount.to_i
+      per_share = per_share_value(amount, shares)
+      {
+        security: security_name(tx, security_names),
+        shares: shares.positive? ? shares : nil,
+        per_share: per_share,
+        offset_account: destination.to_s,
+        note: tx.has_note? ? tx.note.to_s : "",
+        source: tx.respond_to?(:has_source?) && tx.has_source? ? tx.source.to_s : "",
+        symbol: security_attr(security, :tickerSymbol),
+        isin: security_attr(security, :isin),
+        quote: per_share,
+        fees: unit_cents(tx, "FEE"),
+        taxes: unit_cents(tx, "TAX"),
+        net: amount
+      }
+    end
+
+    def extras_from_sheet(cells, mapping)
+      mapping.fetch(:extras, {}).each_with_object({}) do |(key, index), extras|
+        extras[key] = parse_extra(key, cells[index])
+      end
+    end
+
+    def parse_extra(key, value)
+      case key
+      when :shares
+        number = parse_extra_number(value)
+        number && (number * SHARE_SCALE).round
+      when :fees, :taxes, :net
+        parse_signed_cents(value)&.abs
+      when :per_share, :quote
+        parse_extra_number(value)
+      else
+        value.to_s.strip
+      end
+    end
+
+    def parse_extra_number(value)
+      cents = parse_signed_cents(value)
+      cents && cents / 100.0
+    end
+
+    def per_share_value(amount_cents, shares)
+      return if shares.to_i <= 0
+
+      (amount_cents.to_f / 100.0) / (shares.to_f / SHARE_SCALE)
+    end
+
+    def unit_cents(tx, type)
+      unit = Array(tx.units).find { |item| item.type.to_s == type }
+      unit&.amount
+    end
+
+    def security_attr(security, name)
+      return "" unless security
+      return "" unless security.respond_to?(name)
+
+      optional = "has_#{name}?"
+      return "" if security.respond_to?(optional) && !security.public_send(optional)
+
+      security.public_send(name).to_s
+    end
+
+    def ensure_headers(header, kind)
+      extras = extra_columns_for(kind)
+      labels = Array(header).map { |cell| cell.to_s }
+      return HEADERS + extras unless header_row?(labels)
+
+      extras.each do |name|
+        labels << name unless extra_header_present?(labels, name)
+      end
+      labels
+    end
+
+    def extra_header_present?(labels, name)
+      key = extra_key_for_label(name)
+      Array(labels).any? do |label|
+        text = label.to_s.strip.downcase
+        next true if text == name.downcase
+        next false unless key
+
+        EXTRA_HEADERS[key].any? { |pattern| text.match?(pattern) }
+      end
+    end
+
+    def extra_key_for_label(name)
+      text = name.to_s.strip.downcase
+      EXTRA_HEADERS.find { |_key, patterns| patterns.any? { |pattern| text.match?(pattern) } }&.first
+    end
+
+    def merge_extras(proto, row, destination, extra_keys = [])
+      keys = Array(extra_keys)
+      keys = row.extras.to_h.keys if keys.empty?
+      keys.each_with_object({}) do |key, merged|
+        sheet_val = row.extras[key]
+        proto_val = proto.extras.to_h[key]
+        proto_val = destination if key == :offset_account && !extra_present?(proto_val)
+        merged[key] = extra_present?(sheet_val) ? sheet_val : proto_val
+        merged[key] = destination if key == :offset_account && !extra_present?(merged[key])
+      end
+    end
+
+    def same_extras?(left, right, keys)
+      keys.all? { |key| extra_equal?(key, left.to_h[key], right.to_h[key]) }
+    end
+
+    def extra_equal?(key, left, right)
+      return left.to_s.strip == right.to_s.strip unless %i[shares fees taxes net per_share quote].include?(key)
+      return true unless extra_present?(left) || extra_present?(right)
+      return false unless extra_present?(left) && extra_present?(right)
+
+      left.to_f.round(6) == right.to_f.round(6)
+    end
+
+    def extra_present?(value)
+      return false if value.nil?
+      return false if value.is_a?(String) && value.strip.empty?
+
+      true
+    end
+
+    def extra_cell(key, record)
+      value = record.extras.to_h[key]
+      value = record.destination if key == :offset_account && !extra_present?(value)
+      format_extra(key, value)
+    end
+
+    def format_extra(key, value)
+      return "" unless extra_present?(value)
+
+      case key
+      when :shares
+        value.to_f / SHARE_SCALE
+      when :fees, :taxes, :net
+        value.to_f / 100.0
+      when :per_share, :quote
+        value.to_f
+      else
+        value.to_s
+      end
+    end
+
+    def write_cell(cells, index, value)
+      return if index.nil?
+
+      cells << nil while cells.size <= index
+      cells[index] = value
+    end
+
+    def apply_extras!(tx, record, client)
+      extras = record.extras.to_h
+      return false if extras.empty?
+
+      changed = false
+      if extras.key?(:note) && extra_present?(extras[:note]) && tx.note.to_s != extras[:note].to_s
+        tx.note = extras[:note].to_s
+        changed = true
+      end
+      if extras.key?(:source) && tx.source.to_s != extras[:source].to_s
+        tx.source = extras[:source].to_s
+        changed = true
+      end
+      if extras.key?(:shares) && extra_present?(extras[:shares]) && tx.shares.to_i != extras[:shares].to_i
+        tx.shares = extras[:shares].to_i
+        changed = true
+      end
+      security = lookup_security(client, extras)
+      if security && tx.security.to_s != security.uuid
+        tx.security = security.uuid
+        changed = true
+      end
+      changed | apply_units!(tx, extras)
+    end
+
+    def lookup_security(client, extras)
+      securities = Array(client&.securities)
+      isin = extras[:isin].to_s.strip
+      symbol = extras[:symbol].to_s.strip
+      name = extras[:security].to_s.strip
+      found = securities.find { |item| !isin.empty? && security_attr(item, :isin) == isin }
+      found ||= securities.find { |item| !symbol.empty? && security_attr(item, :tickerSymbol).casecmp?(symbol) }
+      found ||= securities.find { |item| !name.empty? && item.name == name }
+      found || securities.find { |item| !name.empty? && item.name.casecmp?(name) }
+    end
+
+    def apply_units!(tx, extras)
+      changed = false
+      { fees: :FEE, taxes: :TAX }.each do |key, type|
+        next unless extras.key?(key) && extra_present?(extras[key])
+
+        cents = extras[key].to_i
+        unit = tx.units.find { |item| item.type.to_s == type.to_s }
+        if unit.nil?
+          tx.units << Proto::PTransactionUnit.new(
+            type: type,
+            amount: cents,
+            currencyCode: tx.currencyCode
+          )
+          changed = true
+        elsif unit.amount != cents
+          unit.amount = cents
+          changed = true
+        end
+      end
+      changed
+    end
+
     private_class_method :merge, :same_row?, :same_proto?, :find_transaction,
                          :update_transaction!, :build_transaction, :wrap_vehicle, :belongs?,
                          :destination_name, :security_name, :destination_column, :assign_counterpart!,
-                         :lookup_name, :take_sheet_row!, :pick_destination
+                         :lookup_name, :take_sheet_row!, :pick_destination, :securities_by_uuid,
+                         :extra_columns, :extras_from_proto, :extras_from_sheet, :parse_extra,
+                         :parse_extra_number, :per_share_value, :unit_cents, :security_attr,
+                         :merge_extras, :same_extras?, :extra_equal?, :extra_present?, :extra_cell,
+                         :format_extra, :write_cell, :apply_extras!, :lookup_security, :apply_units!,
+                         :ensure_headers, :extra_header_present?, :extra_key_for_label
   end
 end

@@ -68,7 +68,7 @@ class SyncSheetsTest < Minitest::Test
       )
       expected = EXPECTED_ROWS.fetch(vehicle.name)
 
-      assert_equal PortfolioPerformanceApi::TransactionSync::HEADERS, rows[0], title
+      assert_equal PortfolioPerformanceApi::TransactionSync.headers_for(vehicle.kind), rows[0], title
       assert_equal expected, parsed.size, title
       assert_kind_of Numeric, rows[1][2], title
       assert_empty plan.create_sheet, title
@@ -110,7 +110,7 @@ class SyncSheetsTest < Minitest::Test
       )
       sheet_plan, = PortfolioPerformanceApi::TransactionSync.split_plan(plan)
       PortfolioPerformanceApi::TransactionSync.apply_sheet(
-        @sheets, title, sheet_plan, skip_rows: 0, chunk_size: chunk, raw_rows: []
+        @sheets, title, sheet_plan, skip_rows: 0, chunk_size: chunk, raw_rows: [], kind: vehicle.kind
       )
     end
     self.class.instance_variable_set(:@seeded, true)
